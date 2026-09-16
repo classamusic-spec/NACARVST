@@ -87,6 +87,11 @@ namespace nacar::ui
         float moduleAlpha (const Module&) const;
         juce::Rectangle<float> rowBounds (const Module&, int row) const;
         juce::Rectangle<float> knobBoundsFor (const Module&) const;
+
+        /** The full-width band of the plate a module occupies, from the seam
+            above it to the seam below.  Used only for shading. */
+        juce::Rectangle<float> moduleBand (int index) const;
+
         void paintModule (juce::Graphics&, const Module&) const;
 
         // -- juce::ValueTree::Listener ---------------------------------------

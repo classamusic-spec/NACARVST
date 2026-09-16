@@ -99,8 +99,20 @@ namespace nacar::ui
 
     void HeaderBar::PresetStrip::paint (juce::Graphics& g)
     {
-        // The glass cut-out itself: flat deep fill, inner top shadow, hairline.
-        GlassPanel::paint (g);
+        // The floor of the cut.  theme::recessedWell rather than GlassPanel's
+        // flat glassSurface: on a fill this dark the inner shadow under the top
+        // edge is nearly invisible, but the catch of light along the *bottom*
+        // wall is not, and that is the half of a recess that actually reads
+        // here.  The lip of the cut belongs to the ceramic around it and is
+        // drawn by HeaderBar::paint.
+        {
+            const auto b = getLocalBounds().toFloat().reduced (0.5f);
+
+            theme::recessedWell (g, b, hdr::presetBarRadius, theme::glassDeep, 1.0f);
+
+            g.setColour (theme::glassEdge);
+            g.drawRoundedRectangle (b.reduced (0.5f), hdr::presetBarRadius, 1.0f);
+        }
 
         // The hdr:: constants are header-local.  The strip's origin is taken
         // off once, here, so nothing inside the strip invents a coordinate.
@@ -183,24 +195,33 @@ namespace nacar::ui
 
     void HeaderBar::paint (juce::Graphics& g)
     {
-        const auto b = getLocalBounds().toFloat();
+        const auto b = getLocalBounds().toFloat().reduced (theme::chassis::plateInset);
 
-        theme::contactShadow (g, b, radiusPanel);
-        theme::ceramicSurface (g, b, radiusPanel);
+        theme::chassis::plate (g, b, radiusPanel);
+
+        // The preset strip is a cut in this plate, and the half of that cut
+        // which reads - the lip - is on the ceramic, outside the strip's own
+        // bounds.  It is drawn before the identity type so nothing overlapping
+        // it picks up the occlusion.
+        theme::chassis::cutOut (g, hdr::presetBar, hdr::presetBarRadius);
 
         // -- identity -------------------------------------------------------
         // fromUTF8 so the acute A survives whatever the compiler thinks the
         // source encoding is.
-        ceramicLabel (g, juce::String::fromUTF8 ("N\xc3\x81""CAR"),
-                      { hdr::wordmarkX, hdr::wordmarkBase },
-                      hdr::wordmarkSize, hdr::wordmarkTrack, theme::ink);
+        //
+        // The wordmark is one of the two runs in the instrument that is
+        // embossed rather than printed - it is the identity, it is large, and
+        // at 30 pt the relief has room to read without fattening the letters.
+        embossedLabel (g, juce::String::fromUTF8 ("N\xc3\x81""CAR"),
+                                { hdr::wordmarkX, hdr::wordmarkBase },
+                                hdr::wordmarkSize, hdr::wordmarkTrack, theme::ink);
 
         ceramicLabel (g, "MEMORY INSTRUMENT",
                       { hdr::descriptorX, hdr::descriptorBase },
                       hdr::descriptorSize, hdr::descriptorTrack, theme::inkMuted);
 
-        theme::hairline (g, { hdr::dividerX, hdr::dividerTop },
-                            { hdr::dividerX, hdr::dividerBottom }, theme::ceramicEdge);
+        theme::chassis::engravedLine (g, { hdr::dividerX, hdr::dividerTop },
+                                  { hdr::dividerX, hdr::dividerBottom });
 
         ceramicLabel (g, "SOUNDS", { hdr::taglineX, hdr::taglineBase1 },
                       hdr::taglineSize, hdr::taglineTrack, theme::inkMuted);

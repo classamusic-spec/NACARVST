@@ -492,6 +492,38 @@ namespace nacar::ui
                        juce::Justification = juce::Justification::centredLeft,
                        float width = 0.0f);
 
+    /** A label that sits ON the surface rather than in front of it.
+
+        This lives here rather than with the rest of the chassis vocabulary in
+        Theme.h for one reason: it is built on ceramicLabel, which is declared
+        in this file, and Theme.h is included BY this file. A shading routine
+        that needs to lay out tracked type has to live on this side of that
+        line. Everything in theme::chassis is pure geometry and colour, which
+        is what let the rest of it move.
+    */
+    /**
+        Type sitting *on* the surface rather than printed onto it: the same
+        run drawn once a pixel low in white and once on the baseline in ink,
+        so the letterform throws the highlight an incised character would
+        throw with the light where it is.
+
+        Used sparingly - on the wordmark and the module names only.  An
+        emboss under everything is the fastest way to make a surface look
+        cheap, which is why this is a separate call and not a flag on
+        ceramicLabel.
+    */
+    inline void embossedLabel (juce::Graphics& g, juce::StringRef text,
+                               juce::Point<float> baselineOrigin,
+                               float sizePx, float trackingEm, juce::Colour colour,
+                               juce::Justification just = juce::Justification::centredLeft,
+                               float width = 0.0f, float relief = 0.55f)
+    {
+        ceramicLabel (g, text, baselineOrigin.translated (0.0f, 1.0f), sizePx, trackingEm,
+                      juce::Colours::white.withAlpha (relief), just, width);
+
+        ceramicLabel (g, text, baselineOrigin, sizePx, trackingEm, colour, just, width);
+    }
+
     /** Draws a small-caps tracked label on glass. */
     void glassLabel (juce::Graphics&, juce::StringRef, juce::Point<float> baselineOrigin,
                      float sizePx, float trackingEm, juce::Colour = theme::glassInkMuted,

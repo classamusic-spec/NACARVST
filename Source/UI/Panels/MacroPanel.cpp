@@ -76,6 +76,37 @@ namespace nacar::ui
             const auto& d = ParameterRegistry::definition (p);
             return juce::String (d.name) + "\n" + juce::String (d.tooltip);
         }
+
+        /** The scale legend under CHARACTER / MOTION / WORLD, cut into the plate.
+
+            ui::scaleLegend draws the same two ends but joins them with a single
+            theme::hairline, and one hairline on a lit surface is a drawn line,
+            not a groove.  The ends are identical; the rule is engraved. */
+        void engravedLegend (juce::Graphics& g, juce::StringRef left, juce::StringRef right,
+                             juce::Rectangle<float> area)
+        {
+            const auto  font     = theme::label (macro::legendSize);
+            const float baseline = area.getCentreY() + font.getAscent() - font.getHeight() * 0.5f;
+            const float track    = macro::legendTrack;
+
+            const float leftW  = theme::trackedWidth (left,  font, track);
+            const float rightW = theme::trackedWidth (right, font, track);
+
+            ceramicLabel (g, left, { area.getX(), baseline },
+                          macro::legendSize, track, theme::inkFaint);
+
+            ceramicLabel (g, right, { area.getRight(), baseline },
+                          macro::legendSize, track, theme::inkFaint,
+                          juce::Justification::right);
+
+            // The rule fills what the two ends leave between them.
+            const float ruleL = area.getX() + leftW + 6.0f;
+            const float ruleR = area.getRight() - rightW - 6.0f;
+
+            if (ruleR > ruleL + 2.0f)
+                theme::chassis::engravedLine (g, { ruleL, area.getCentreY() },
+                                          { ruleR, area.getCentreY() });
+        }
     }
 
     // =======================================================================
@@ -149,10 +180,9 @@ namespace nacar::ui
 
     void MacroPanel::paint (juce::Graphics& g)
     {
-        const auto b = getLocalBounds().toFloat();
+        const auto b = getLocalBounds().toFloat().reduced (theme::chassis::plateInset);
 
-        theme::contactShadow (g, b, radiusPanel);
-        theme::ceramicSurface (g, b, radiusPanel);
+        theme::chassis::plate (g, b, radiusPanel);
 
         // --------------------------------------------------------------------
         //  Scale legends.
@@ -164,14 +194,14 @@ namespace nacar::ui
         //  than its 96 px body besides.  Drawing all three in the panel is the
         //  only way to land every one on its transcribed baseline.
         // --------------------------------------------------------------------
-        scaleLegend (g, "CLEAN", "WORN",
-                     legendArea (macro::character, macro::legendCharacterBase));
+        engravedLegend (g, "CLEAN", "WORN",
+                        legendArea (macro::character, macro::legendCharacterBase));
 
-        scaleLegend (g, "STILL", "ALIVE",
-                     legendArea (macro::motion, macro::legendMotionBase));
+        engravedLegend (g, "STILL", "ALIVE",
+                        legendArea (macro::motion, macro::legendMotionBase));
 
-        scaleLegend (g, "INTIMATE", "EXPANSIVE",
-                     legendArea (macro::world, macro::legendWorldBase, worldLegendWiden));
+        engravedLegend (g, "INTIMATE", "EXPANSIVE",
+                        legendArea (macro::world, macro::legendWorldBase, worldLegendWiden));
     }
 
     void MacroPanel::resized()

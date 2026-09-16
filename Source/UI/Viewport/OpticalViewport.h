@@ -16,6 +16,70 @@
 namespace nacar::ui
 {
     /**
+        A control inside the optical viewport, drawn as an object.
+
+        IconButton's round and square styles lay their body down with
+        theme::glassSurface, which is the CUT-OUT routine: an inner shadow under
+        the top edge and no drop shadow.  That is right for a hole and wrong for
+        a control that is meant to sit proud of the glass, and it is why the
+        transport row currently reads as a set of glyphs printed on the panel.
+
+        This subclass keeps the whole of IconButton's behaviour - hit area,
+        tooltip, enabled and active flags, the juce::Button contract - and
+        replaces only the body, with theme::raisedGlass, so the viewport's
+        controls are lit from the same upper-left source as the rest of the
+        instrument.  Widgets.h belongs to another part of the build and is not
+        edited from here; subclassing is how the viewport states its own case
+        without reaching into it.
+
+        IconButton::setColours writes members this class cannot see, so the
+        glyph colours are kept again here.
+    */
+    class ViewportButton : public IconButton
+    {
+    public:
+        enum class Body
+        {
+            disc,    ///< play: a raised glass disc
+            square,  ///< stop, and the four view-mode buttons
+            glyph    ///< a bare glyph at rest, which grows a body under the pointer
+        };
+
+        ViewportButton (icons::Icon, Body, theme::Elevation = theme::Elevation::resting);
+
+        void setGlyphColours (juce::Colour rest, juce::Colour lit);
+        void setGlyphRatio (float) noexcept;
+
+        /** Corner radius for Body::square.  Left unset, the button takes the
+            radius the view-mode buttons use; stop is larger than those and sets
+            its own, so the two read as the same corner at different sizes. */
+        void setCornerRadius (float) noexcept;
+
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+
+    protected:
+        void buttonStateChanged() override;
+
+    private:
+        icons::Icon glyph;
+        Body body;
+        theme::Elevation elevation;
+
+        float glyphRatio = 0.46f;
+        float corner = 0.0f;              ///< 0 = the default for this body
+        juce::Colour restColour { theme::glassInkMuted };
+        juce::Colour litColour  { theme::violet };
+
+        /** Hover and press as quantities rather than as booleans, on the same
+            shared ticker every other control in the instrument uses - so the
+            transport row travels rather than switching, like its neighbours. */
+        detail::Motion hoverAnim { *this, 0.30f };
+        detail::Motion pressAnim { *this, 0.55f };
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ViewportButton)
+    };
+
+    /**
         The optical viewport - UI spec section 5.
 
         A recessed optical-glass panel cut into the chassis at layout::viewport,
@@ -113,16 +177,23 @@ namespace nacar::ui
         IconButton pencilButton { icons::Icon::pencil, IconButton::Style::plain };
         PillButton snapPill     { "SNAP", PillButton::Style::glass };
 
-        std::array<std::unique_ptr<IconButton>, 4> toolButtons;
+        std::array<std::unique_ptr<ViewportButton>, 4> toolButtons;
 
-        IconButton playButton    { icons::Icon::play,         IconButton::Style::glassRound };
-        IconButton stopButton    { icons::Icon::stop,         IconButton::Style::glassRound };
-        IconButton resetButton   { icons::Icon::returnToZero, IconButton::Style::plain };
-        IconButton loopButton    { icons::Icon::loop,         IconButton::Style::plain };
-        IconButton trimButton    { icons::Icon::trim,         IconButton::Style::plain };
-        IconButton shuffleButton { icons::Icon::shuffle,      IconButton::Style::plain };
-        IconButton zoomOutButton { icons::Icon::zoomOut,      IconButton::Style::plain };
-        IconButton zoomInButton  { icons::Icon::zoomIn,       IconButton::Style::plain };
+        // Play is the most-looked-at control in the panel and is the one thing
+        // in the row raised a full step off the glass.  Stop is a rounded
+        // square beside it - the reference pairs a circle with a square here,
+        // and the square rhymes with the four view-mode buttons above.  The
+        // rest are glyphs until the pointer is on them.
+        ViewportButton playButton    { icons::Icon::play,   ViewportButton::Body::disc,
+                                       theme::Elevation::raised };
+        ViewportButton stopButton    { icons::Icon::stop,   ViewportButton::Body::square,
+                                       theme::Elevation::resting };
+        ViewportButton resetButton   { icons::Icon::returnToZero, ViewportButton::Body::glyph };
+        ViewportButton loopButton    { icons::Icon::loop,    ViewportButton::Body::glyph };
+        ViewportButton trimButton    { icons::Icon::trim,    ViewportButton::Body::glyph };
+        ViewportButton shuffleButton { icons::Icon::shuffle, ViewportButton::Body::glyph };
+        ViewportButton zoomOutButton { icons::Icon::zoomOut, ViewportButton::Body::glyph };
+        ViewportButton zoomInButton  { icons::Icon::zoomIn,  ViewportButton::Body::glyph };
 
         HairlineSlider zoomSlider;
         juce::TextEditor renameEditor;

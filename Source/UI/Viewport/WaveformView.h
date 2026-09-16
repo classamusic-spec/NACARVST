@@ -170,6 +170,18 @@ namespace nacar::ui
         juce::Path buildEnvelopePath (juce::Rectangle<float> area, juce::Path& crestTop,
                                       juce::Path& crestBottom) const;
 
+        /** The cut this field sits in.  A well, not a rectangle: the wall
+            nearest the light is the one in shadow. */
+        void paintWell (juce::Graphics&, juce::Rectangle<float> area, float corner) const;
+
+        /** Lays the envelope down as something that emits rather than something
+            that is filled: a bounded halo, a body with a bright spine, and a
+            crest along the peaks.  See the comment at the definition for the
+            layer count, which is the budget this runs on. */
+        void paintEnvelope (juce::Graphics&, juce::Rectangle<float> area,
+                            const juce::Path& body, const juce::Path& crestTop,
+                            const juce::Path& crestBottom) const;
+
         void paintEmptyInvitation (juce::Graphics&, juce::Rectangle<float> area,
                                    bool monitoringSynth) const;
         void paintPendingSample (juce::Graphics&, juce::Rectangle<float> area) const;

@@ -20,6 +20,21 @@ namespace nacar::ui
     static constexpr float kDotGlow        =  9.0f;
     static constexpr float kOffAlpha       =  0.45f;  // a module whose enable is off
 
+    // -- how a module is seated ---------------------------------------------
+    //  The reference does NOT box these four, and anything with a left and a
+    //  right edge is a box however faint it is drawn - which rules out
+    //  theme::recessedWell here, because a well 200 px tall strokes its inner
+    //  shadow down both sides and the sides are all you would see.
+    //
+    //  What is left is the only part of a recess that can be drawn without
+    //  edges: the shadow the near wall throws onto the floor.  Each module gets
+    //  a short fall-off under the seam above it, running the full width of the
+    //  plate, so the seam reads as a step down onto the module rather than as a
+    //  line ruled across a flat surface.  There is nothing else: no fill, no
+    //  outline, no side.
+    static constexpr float kSeatFall  = 13.0f;    ///< how far the step's shadow reaches
+    static constexpr float kSeatAlpha =  0.055f;  ///< and how dark it starts
+
     // =======================================================================
     //  Construction
     // =======================================================================
@@ -236,6 +251,17 @@ namespace nacar::ui
         return centredSquare (m.spec.knob, m.spec.knobRadius);
     }
 
+    juce::Rectangle<float> AtmospherePanel::moduleBand (int index) const
+    {
+        const float top    = index == 0 ? kPanelInset
+                                        : atmos::divider[index - 1];
+
+        const float bottom = index == numModules - 1 ? (float) getHeight() - kPanelInset
+                                                     : atmos::divider[index];
+
+        return { 0.0f, top, (float) getWidth(), juce::jmax (0.0f, bottom - top) };
+    }
+
     void AtmospherePanel::resized()
     {
         for (auto& m : modules)
@@ -261,20 +287,40 @@ namespace nacar::ui
     {
         const auto b = getLocalBounds().toFloat().reduced (kPanelInset);
 
-        theme::contactShadow (g, b, radiusPanel);
-        theme::ceramicSurface (g, b, radiusPanel);
+        theme::chassis::plate (g, b, radiusPanel);
 
-        // -- module dividers -------------------------------------------------
-        for (const float y : atmos::divider)
+        // -- the four seats --------------------------------------------------
+        // Drawn before the seams: the fall-off starts at the seam, so the seam
+        // has to be laid over the top of it.  Module 0 has no seam above it -
+        // the plate's own top edge is not a step - and so gets no shadow.
         {
-            const float left  = kDividerInset;
-            const float right = (float) getWidth() - kDividerInset;
+            juce::Graphics::ScopedSaveState ss (g);
 
-            theme::hairline (g, { left, y }, { right, y }, theme::ceramicEdge);
+            juce::Path body;
+            body.addRoundedRectangle (b, radiusPanel);
+            g.reduceClipRegion (body);
 
-            // The seam is machined, so the surface below it catches the light.
-            theme::hairline (g, { left, y + 1.0f }, { right, y + 1.0f }, theme::ceramicLight);
+            for (int i = 1; i < numModules; ++i)
+            {
+                const auto band = moduleBand (i);
+                const float fall = juce::jmin (kSeatFall, band.getHeight() * 0.25f);
+
+                if (fall <= 1.0f)
+                    continue;
+
+                g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (kSeatAlpha),
+                                                         band.getCentreX(), band.getY(),
+                                                         juce::Colours::transparentBlack,
+                                                         band.getCentreX(), band.getY() + fall,
+                                                         false));
+                g.fillRect (band.withHeight (fall));
+            }
         }
+
+        // -- module seams ----------------------------------------------------
+        for (const float y : atmos::divider)
+            theme::chassis::engravedLine (g, { kDividerInset, y },
+                                      { (float) getWidth() - kDividerInset, y });
 
         for (const auto& m : modules)
             paintModule (g, m);
@@ -294,8 +340,14 @@ namespace nacar::ui
         // -- name and subtitle ------------------------------------------------
         // These stay at full strength when the module is off: the panel should
         // always read as four modules, with only the controls going quiet.
-        ceramicLabel (g, m.title, { atmos::titleX, s.titleBaseline },
-                      atmos::titleSize, atmos::titleTrack, theme::ink);
+        //
+        // The module name is the second and last embossed run in the
+        // instrument.  At 13 pt the relief is a single pixel of white under the
+        // stem, which is as much as type this size will take before the
+        // letterforms start to look soft.
+        embossedLabel (g, m.title, { atmos::titleX, s.titleBaseline },
+                                atmos::titleSize, atmos::titleTrack, theme::ink,
+                                juce::Justification::centredLeft, 0.0f, 0.45f);
 
         ceramicLabel (g, m.subtitle, { atmos::titleX, s.subtitleBaseline },
                       atmos::subSize, atmos::subTrack, theme::inkFaint);
@@ -309,9 +361,8 @@ namespace nacar::ui
         const float firstBaseline = s.listTop;
         const float lastBaseline  = s.listTop + (float) (rows - 1) * s.listSpacing;
 
-        theme::hairline (g, { atmos::ruleX, firstBaseline - kRowAbove },
-                         { atmos::ruleX, lastBaseline + kRowBelow },
-                         theme::ceramicEdge.withMultipliedAlpha (alpha));
+        theme::chassis::engravedLine (g, { atmos::ruleX, firstBaseline - kRowAbove },
+                                  { atmos::ruleX, lastBaseline + kRowBelow }, alpha);
 
         // -- the rows ----------------------------------------------------------
         for (int i = 0; i < rows; ++i)

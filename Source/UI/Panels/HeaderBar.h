@@ -2,6 +2,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cmath>
+
 #include "../Theme.h"
 #include "../Layout.h"
 #include "../EditorHost.h"
@@ -11,6 +13,25 @@
 
 namespace nacar::ui
 {
+    // =======================================================================
+    //  chassis - the shading the four region panels share
+    //
+    //  The header, the macro panel, the atmosphere panel and the bottom bar are
+    //  one machined object seen in four places.  They therefore cannot each
+    //  invent their own edge: a plate whose rim is lit differently from the
+    //  plate beside it stops being the same piece of metal, which is the whole
+    //  of what UI spec section 12 is about.  These four routines are written
+    //  once and used by all four panels.
+    //
+    //  They belong in Theme.h, beside the raisedCeramic() and recessedWell()
+    //  they are built out of.  Theme.h is frozen for V1, so they live in the
+    //  header of the topmost region instead and the other three include it.
+    //
+    //  Nothing here introduces a colour.  Every value is either a theme::
+    //  shade or a white / black lighting operation of exactly the kind
+    //  Theme.cpp already performs for every specular and bevel it draws.
+    // =======================================================================
+
     /**
         The header: a raised ceramic bar spanning the whole chassis.
 

@@ -17,6 +17,39 @@
 namespace nacar::ui
 {
     /**
+        MUTATE - the one control in the instrument that emits light.
+
+        PillButton::Style::violet already lays the body down with
+        theme::accentSurface, which is right and is not re-done here.  What it
+        cannot express is the ink: it returns a single colour for the label and
+        the glyph together, and that colour is theme::ink.  The reference sets
+        both in violet on the pale lilac face, and that violet-on-lilac is most
+        of what makes the button read as lit from within rather than as a
+        lilac rectangle with a caption on it.
+
+        So this subclass overrides the face rather than the widget: the same
+        accentSurface body, the same content layout as every other pill - the
+        travel under a press included, so the label stays printed on the face
+        it sits on - and violet ink.  Nothing in Widgets.* is touched.
+    */
+    class MutateButton : public PillButton
+    {
+    public:
+        MutateButton();
+
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+
+    protected:
+        void buttonStateChanged() override;
+
+    private:
+        detail::Motion hoverAnim { *this, 0.30f };
+        detail::Motion pressAnim { *this, 0.55f };
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MutateButton)
+    };
+
+    /**
         The mutate panel - UI spec section 6.
 
         A raised ceramic panel carrying the whole mutation decision: what kind
@@ -67,7 +100,7 @@ namespace nacar::ui
         SegmentedControl distanceSelector;
         IntentSelector   intentSelector;
 
-        PillButton mutateButton;
+        MutateButton mutateButton;
         PillButton againButton;
         PillButton printButton;
         PillButton makeInstrumentButton;

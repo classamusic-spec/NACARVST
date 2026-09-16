@@ -60,6 +60,145 @@ namespace nacar::ui
     static constexpr float listNoteTrack  = 0.20f;
 
     // -----------------------------------------------------------------------
+    //  How deep the well is.
+    //
+    //  UI spec section 12: the glass regions are cut-outs, and the viewport is
+    //  deeper at its centre than at its edges.  theme::recessedWell draws its
+    //  inner shadow as four inset strokes, which is the right depth for a pill
+    //  or a switch track and reads as a hairline on a panel 337 px tall - so
+    //  the panel adds a gradient band of its own under the top edge, and the
+    //  well routine supplies the bevel and the catch of light below it.
+    // -----------------------------------------------------------------------
+
+    /** Height of the inner shadow under the viewport's top edge. */
+    static constexpr float wellShadowDepth = 26.0f;
+
+    /** Alpha of that shadow where it meets the top edge. */
+    static constexpr float wellShadowAlpha = 0.58f;
+
+    /** Passed to theme::recessedWell.  Above 1 the bevel and the catch of light
+        both strengthen, which is what "noticeably deeper" means here. */
+    static constexpr float wellDepth = 1.45f;
+
+    /** Corner radius of the four view-mode buttons.  Widgets.h draws its icon
+        squares at 8; the same value keeps them in the family. */
+    static constexpr float toolButtonCorner = 8.0f;
+
+    /** Corner radius of the square stop button.  It is 44 px across where the
+        view-mode buttons are 29, so holding the same radius would read as a
+        sharper corner; 12 is the same corner-to-size ratio (29/8) at 44, which
+        is what makes the two read as the same shape at two sizes. */
+    static constexpr float transportSquareCorner = 12.0f;
+
+    /** How far inside the active view-mode button its violet glow reaches. */
+    static constexpr float toolGlowSpread = 4.0f;
+
+    // =======================================================================
+    //  ViewportButton
+    // =======================================================================
+    ViewportButton::ViewportButton (icons::Icon i, Body b, theme::Elevation e)
+        : IconButton (i, IconButton::Style::plain), glyph (i), body (b), elevation (e)
+    {
+    }
+
+    void ViewportButton::setGlyphColours (juce::Colour rest, juce::Colour lit)
+    {
+        restColour = rest;
+        litColour  = lit;
+        repaint();
+    }
+
+    void ViewportButton::setGlyphRatio (float r) noexcept
+    {
+        glyphRatio = r;
+        repaint();
+    }
+
+    void ViewportButton::setCornerRadius (float r) noexcept
+    {
+        corner = r;
+        repaint();
+    }
+
+    void ViewportButton::buttonStateChanged()
+    {
+        IconButton::buttonStateChanged();
+
+        hoverAnim.setTarget (isOver() ? 1.0f : 0.0f);
+        pressAnim.setTarget (isDown() ? 1.0f : 0.0f);
+    }
+
+    void ViewportButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+    {
+        const auto  b = getLocalBounds().toFloat().reduced (1.0f);
+        const float d = juce::jmin (b.getWidth(), b.getHeight());
+
+        const float press = pressAnim.get();
+        const float hover = juce::jmax (hoverAnim.get(), highlighted ? 1.0f : 0.0f);
+
+        juce::ignoreUnused (down);
+
+        auto colour = isActive() ? litColour : restColour;
+
+        switch (body)
+        {
+            case Body::disc:
+            {
+                const auto disc = juce::Rectangle<float> (d, d).withCentre (b.getCentre());
+                theme::raisedGlass (g, disc, d * 0.5f, elevation, press, hover);
+                break;
+            }
+
+            case Body::square:
+            {
+                const float c = corner > 0.0f ? corner : toolButtonCorner;
+
+                theme::raisedGlass (g, b, c, elevation, press, hover);
+
+                // The active one is lit rather than filled: violet inside the
+                // edge and a little of it thrown onto the glass behind.  Spec
+                // section 12 - violet is one of the two things that emit.
+                if (isActive())
+                {
+                    theme::outerGlow (g, b, c, theme::violet,
+                                      0.22f + hover * 0.10f, toolGlowSpread);
+                    theme::innerGlow (g, b, c, theme::violet, 0.60f, toolGlowSpread);
+                }
+                break;
+            }
+
+            case Body::glyph:
+            default:
+                // The reference draws these as bare glyphs on the glass, so
+                // that is what they are at rest.  They still become objects
+                // under the pointer, which is what makes the row feel touchable
+                // without making it louder than the image.
+                //
+                //  The body arrives whole rather than fading in: fading it
+                //  would need a transparency layer, which is an offscreen
+                //  image, and the one thing this viewport may not do is
+                //  allocate one per frame.  The travel that is felt is the
+                //  sink under the press, and theme::raisedGlass animates that
+                //  from `press` for nothing.
+                if (juce::jmax (hover, press) > 0.5f)
+                    theme::raisedGlass (g, juce::Rectangle<float> (d, d).withCentre (b.getCentre()),
+                                        d * 0.5f, theme::Elevation::resting, press, hover);
+                break;
+        }
+
+        if (! isEnabled())
+            colour = colour.withAlpha (0.4f);
+        else if (hover > 0.5f && ! isActive())
+            colour = colour.brighter (0.25f);
+
+        const float glyphR = d * glyphRatio * 0.5f;
+        const auto  centre = b.getCentre().translated (0.0f, press * 0.8f);
+
+        icons::draw (g, glyph, juce::Rectangle<float> (glyphR * 2.0f, glyphR * 2.0f)
+                                   .withCentre (centre), colour);
+    }
+
+    // -----------------------------------------------------------------------
     static juce::String formatTime (double seconds, bool withTenths)
     {
         if (! std::isfinite (seconds) || seconds < 0.0)
@@ -150,8 +289,9 @@ namespace nacar::ui
 
         for (size_t i = 0; i < toolIcons.size(); ++i)
         {
-            auto button = std::make_unique<IconButton> (toolIcons[i], IconButton::Style::glassSquare);
-            button->setColours (theme::glassInkMuted, theme::violet);
+            auto button = std::make_unique<ViewportButton> (toolIcons[i],
+                                                           ViewportButton::Body::square);
+            button->setGlyphColours (theme::glassInkMuted, theme::violet);
             button->setTooltip (toolTips[i]);
 
             const int index = (int) i;
@@ -170,14 +310,16 @@ namespace nacar::ui
 
         for (auto* b : { &playButton, &stopButton })
         {
-            b->setColours (theme::glassInk, theme::violet);
+            b->setGlyphColours (theme::glassInk, theme::violet);
             addAndMakeVisible (*b);
         }
+
+        stopButton.setCornerRadius (transportSquareCorner);
 
         for (auto* b : { &resetButton, &loopButton, &trimButton, &shuffleButton,
                          &zoomOutButton, &zoomInButton })
         {
-            b->setColours (theme::glassInkMuted, theme::violet);
+            b->setGlyphColours (theme::glassInkMuted, theme::violet);
             addAndMakeVisible (*b);
         }
 
@@ -409,11 +551,9 @@ namespace nacar::ui
             if (toolButtons[i] == nullptr)
                 continue;
 
-            const bool active = ((int) i == (int) viewMode);
-
-            toolButtons[i]->setStyle (active ? IconButton::Style::violetSquare
-                                             : IconButton::Style::glassSquare);
-            toolButtons[i]->setActive (active);
+            // ViewportButton draws the active state as light rather than as a
+            // different style, so the flag is the whole of it.
+            toolButtons[i]->setActive ((int) i == (int) viewMode);
         }
 
         syncOverviewWindow();
@@ -431,9 +571,62 @@ namespace nacar::ui
     // =======================================================================
     void OpticalViewport::paint (juce::Graphics& g)
     {
-        // Glass is a cut-out: recessed fill, inner top shadow, hairline edge,
-        // and deliberately no drop shadow.
-        theme::glassSurface (g, getLocalBounds().toFloat(), radiusPanel);
+        const auto bounds = getLocalBounds().toFloat();
+
+        // ------------------------------------------------------------------
+        //  The well.
+        //
+        //  Glass is a hole in the chassis, never an object on it, so there is
+        //  no drop shadow anywhere in here.  What makes a hole read as a hole
+        //  is the wall the light cannot reach - the near one, under the top
+        //  edge - and a catch of light on the far one.  UI spec section 12.
+        // ------------------------------------------------------------------
+
+        // 1. The body, deeper at the centre than at the edges.  The three glass
+        //    shades are used for exactly what section 1 names them for: deep at
+        //    the centre of the viewport, mid through the middle distance,
+        //    raised where the cut meets the chassis.
+        {
+            const float reach = juce::jmax (1.0f, std::hypot (bounds.getWidth(),
+                                                              bounds.getHeight()) * 0.5f);
+
+            juce::ColourGradient body (theme::glassDeep, bounds.getCentreX(), bounds.getCentreY(),
+                                       theme::glassRaised, bounds.getCentreX() + reach,
+                                       bounds.getCentreY(), true);
+            body.addColour (0.62, theme::glassMid);
+
+            g.setGradientFill (body);
+            g.fillRoundedRectangle (bounds, radiusPanel);
+        }
+
+        // 2. The inner shadow.  theme::recessedWell's own is four inset strokes
+        //    - the right depth for a switch track, a hairline on a panel this
+        //    tall - so the depth of the cut is a gradient band, and the well
+        //    routine below supplies the bevel and the catch of light.
+        {
+            juce::Graphics::ScopedSaveState saved (g);
+
+            juce::Path clip;
+            clip.addRoundedRectangle (bounds, radiusPanel);
+            g.reduceClipRegion (clip);
+
+            g.setGradientFill (juce::ColourGradient (
+                juce::Colours::black.withAlpha (wellShadowAlpha),
+                bounds.getCentreX(), bounds.getY(),
+                juce::Colours::transparentBlack,
+                bounds.getCentreX(), bounds.getY() + wellShadowDepth, false));
+
+            g.fillRect (bounds.withHeight (wellShadowDepth));
+        }
+
+        // 3. The walls.  A transparent body, because the gradient above is the
+        //    body: recessedWell then strokes its bevel and its catch of light
+        //    onto that instead of flattening it back to one colour.
+        theme::recessedWell (g, bounds, radiusPanel, juce::Colours::transparentBlack, wellDepth);
+
+        // 4. The hairline where the cut meets the chassis - spec section 1.
+        g.setColour (theme::glassEdge);
+        g.drawRoundedRectangle (bounds.reduced (0.5f), radiusPanel, 1.0f);
 
         paintHeader (g);
 
@@ -503,7 +696,9 @@ namespace nacar::ui
         // Phase 19.
         const auto area = vp::waveField;
 
-        theme::glassSurface (g, area, radiusCard, theme::glassDeep);
+        // The same cut the waveform field occupies, so switching view mode
+        // changes what is in the well rather than how deep it is.
+        theme::recessedWell (g, area, radiusCard, theme::glassDeep, wellDepth);
 
         const auto title = theme::label (listTitleSize);
         const auto note  = theme::label (listNoteSize);

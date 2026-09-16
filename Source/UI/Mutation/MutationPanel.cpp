@@ -97,6 +97,16 @@ namespace nacar::ui
         /// loud next to 11 pt type).  0.30 lands the glyph at about 17 px.
         constexpr float actionIconRatio = 0.30f;
 
+        /// Gap between a pill's glyph and its label.  Widgets.cpp uses 8 for
+        /// every pill in the instrument; MUTATE draws its own face and so has
+        /// to state the same number rather than inherit it, or it would be the
+        /// one button in the row whose glyph sits at a different distance.
+        constexpr float actionIconGap = 8.0f;
+
+        /// How far MUTATE's content travels as the face sinks.  Matches the
+        /// press travel Widgets.cpp gives every other pill.
+        constexpr float actionPressTravel = 0.8f;
+
         /// UI spec 6: the action-row divider runs y 598 -> 640 inside a row
         /// that spans 590 -> 647, i.e. inset 8 at each end.
         constexpr float dividerInset = 8.0f;
@@ -180,6 +190,73 @@ namespace nacar::ui
     }
 
     // =======================================================================
+    //  MutateButton
+    // =======================================================================
+    MutateButton::MutateButton()
+        : PillButton ("MUTATE", PillButton::Style::violet)
+    {
+    }
+
+    void MutateButton::buttonStateChanged()
+    {
+        PillButton::buttonStateChanged();
+
+        hoverAnim.setTarget (isOver() ? 1.0f : 0.0f);
+        pressAnim.setTarget (isDown() ? 1.0f : 0.0f);
+    }
+
+    void MutateButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+    {
+        const auto b = getLocalBounds().toFloat().reduced (1.0f);
+
+        // The booleans JUCE hands paintButton are the truth; the motions are
+        // the same truth part-way there.
+        hoverAnim.setTarget (highlighted ? 1.0f : 0.0f);
+        pressAnim.setTarget (down ? 1.0f : 0.0f);
+
+        const float press = pressAnim.get();
+        const float hover = hoverAnim.get();
+
+        // The body: exactly what PillButton::Style::violet draws, because that
+        // part was already right.
+        theme::accentSurface (g, b, actionCorner, theme::violet, press, hover);
+
+        // The ink.  This was violetDeep, the darkest violet the palette had -
+        // and measured on the render it gave a contrast ratio of 1.6:1 against
+        // a face accentSurface brightens by 0.30.  That is unreadable, and it
+        // was reported as a number rather than accepted as a look, which is
+        // what got theme::violetInk added: the fourth violet, dark enough to
+        // read at 4.4:1 and still unambiguously the same hue.
+        auto colour = theme::violetInk;
+
+        if (! isEnabled())
+            colour = colour.withAlpha (0.45f);
+
+        // Content travels with the face it is printed on.
+        const float travel = press * actionPressTravel;
+
+        const auto  font     = theme::label (mutateTextSize);
+        const float iconSize = b.getHeight() * actionIconRatio;
+        const float textW    = theme::trackedWidth (getButtonText(), font, mutateTextTrack);
+
+        const float content = textW + iconSize + actionIconGap;
+
+        float x = b.getCentreX() - content * 0.5f;
+
+        icons::draw (g, icons::Icon::sparkle,
+                     layout::centredSquare ({ x + iconSize * 0.5f, b.getCentreY() + travel },
+                                            iconSize * 0.5f),
+                     colour, glyphStroke);
+
+        x += iconSize + actionIconGap;
+
+        g.setColour (colour);
+        theme::drawTracked (g, getButtonText(),
+                            { x, b.getY() + travel, textW, b.getHeight() },
+                            font, mutateTextTrack, juce::Justification::centredLeft);
+    }
+
+    // =======================================================================
     //  MutationPanel
     // =======================================================================
     MutationPanel::MutationPanel (NacarProcessor& p, EditorHost& h)
@@ -192,7 +269,7 @@ namespace nacar::ui
           distanceSelector (ParameterRegistry::choicesOf (PID::distanceMode),
                             SegmentedControl::Style::darkFill),
           intentSelector   (p.getParameters()),
-          mutateButton         ("MUTATE",          PillButton::Style::violet),
+          // MutateButton names and styles itself - see the class comment.
           againButton          ("AGAIN",           PillButton::Style::glass),
           printButton          ("PRINT",           PillButton::Style::glass),
           makeInstrumentButton ("MAKE INSTRUMENT", PillButton::Style::ceramic)
@@ -222,9 +299,10 @@ namespace nacar::ui
         addAndMakeVisible (intentSelector);
 
         // -- Action row ------------------------------------------------------
-        mutateButton.setTextSize (mutateTextSize, mutateTextTrack);
-        mutateButton.setCornerRadius (actionCorner);
-        mutateButton.setIcon (icons::Icon::sparkle, actionIconRatio);
+        //
+        //  MUTATE draws its own face, so it carries its own type, corner and
+        //  glyph rather than being told them here; the three beside it are
+        //  ordinary pills and are set up in full.
         mutateButton.setTooltip ("Mutate\nRolls a new mutation seed and records the recipe "
                                  "(intent, harmony, distance). The transformation engine "
                                  "arrives in phase 21 - no audio is altered yet.");
@@ -312,8 +390,13 @@ namespace nacar::ui
     {
         const auto bounds = getLocalBounds().toFloat().reduced (shadowInset);
 
-        theme::contactShadow  (g, bounds, layout::radiusPanel);
-        theme::ceramicSurface (g, bounds, layout::radiusPanel);
+        // The panel is a machined plate sitting on the chassis, not a filled
+        // rectangle: theme::raisedCeramic gives it the contact shadow, the
+        // specular along its top edge, the bevel along its bottom one, and -
+        // the detail UI spec section 12 singles out - the inset highlight one
+        // pixel inside the top edge that reads as the material's own thickness.
+        // At Elevation::resting, because a panel is seated, not floating.
+        theme::raisedCeramic (g, bounds, layout::radiusPanel, theme::Elevation::resting);
 
         // -- heading ---------------------------------------------------------
         icons::draw (g, icons::Icon::sparkle,

@@ -47,6 +47,16 @@ namespace nacar::ui
     /// locked to two accents, so the warning is a shift, not a new hue.
     static constexpr float meterWarnMix = 0.55f;
 
+    /// The halo the lit run throws into the channel and onto the chassis around
+    /// it.  Mint is one of the two things in the instrument that emits rather
+    /// than reflects (spec section 12), so the meter has to behave like a
+    /// source: a flat fill of a bright colour is a printed bar, not a light.
+    static constexpr float meterGlowSpread = 5.0f;
+    static constexpr float meterGlowAlpha  = 0.20f;   ///< over the whole lit run
+    static constexpr float meterTipSpread  = 4.0f;
+    static constexpr float meterTipAlpha   = 0.34f;   ///< concentrated at the level
+    static constexpr int   meterTipSegs    = 3;       ///< how much of the run is "the tip"
+
     // -----------------------------------------------------------------------
     //  Source pills and nav items, in reference order.  File-local: other
     //  panels are being written against the same headers in parallel.
@@ -122,15 +132,22 @@ namespace nacar::ui
 
             if (active)
             {
-                // A raised ceramic pill lifted out of the glass bar.
-                theme::contactShadow (g, b.reduced (1.0f), radiusCard, 2.0f, 7.0f, 0.34f);
-                theme::ceramicSurface (g, b.reduced (1.0f), radiusCard);
+                // A ceramic pill lifted out of the slab it sits in.  The slab
+                // is a cut-out, so this is the one element in the bottom bar
+                // that is genuinely above the chassis rather than below it, and
+                // it gets the full raised treatment: contact shadow onto the
+                // glass, specular top edge, bevelled bottom, and the inset
+                // highlight a pixel inside the top that reads as thickness.
+                theme::raisedCeramic (g, b.reduced (1.0f), radiusCard,
+                                      theme::Elevation::raised);
             }
             else if (hovered)
             {
-                // "glass raised" is the material language's hover fill.
-                g.setColour (theme::glassRaised);
-                g.fillRoundedRectangle (b.reduced (1.0f), radiusCard);
+                // Still inside the cut, so it is lit at its edges rather than
+                // in its face: a dark chip on a dark ground carries no
+                // information in its fill.
+                theme::raisedGlass (g, b.reduced (1.0f), radiusCard,
+                                    theme::Elevation::flush, 0.0f, 1.0f);
             }
 
             const auto tint = active  ? theme::ink
@@ -284,8 +301,36 @@ namespace nacar::ui
         // behind it actually moved, so this cannot turn into a repaint loop.
         syncFromHost();
 
-        // The bar carries no panel of its own: the source pills and the nav bar
-        // bring their own surfaces and the strip between them is bare chassis.
+        // The bar is a ceramic plate, the same piece of chassis as the header
+        // at the other end of the window - the source pills are raised out of
+        // it, and the nav slab and the output channel are cut into it.  (It
+        // used to paint nothing at all and let the bare canvas show through,
+        // which left the one band of the interface where every element floated
+        // on nothing.)
+        const auto b = getLocalBounds().toFloat().reduced (theme::chassis::plateInset);
+
+        theme::chassis::plate (g, b, radiusPanel);
+
+        // The two cuts.  Their lips are on the ceramic, outside the bounds of
+        // whatever fills them, so they are drawn here rather than by the slab
+        // and the meter themselves.
+        //
+        // Clipped to the face of the plate because the nav slab is 60 px tall
+        // in a 66 px bar: its lip would otherwise land on the plate's own top
+        // rim and put a dark notch through the specular for a third of the
+        // width of the window.  The slab keeps its side and bottom walls, and
+        // the near wall it loses is the one the reference has no room for
+        // either.
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+
+            juce::Path face;
+            face.addRoundedRectangle (b.reduced (1.5f), juce::jmax (0.5f, radiusPanel - 1.5f));
+            g.reduceClipRegion (face);
+
+            theme::chassis::cutOut (g, bottom::navBar, radiusPanel);
+            theme::chassis::cutOut (g, bottom::meter, meterCorner);
+        }
 
         ceramicLabel (g, "OUTPUT", { bottom::outputLabelX, bottom::outputBase },
                       outputLabelSize, outputLabelTrack, theme::inkMuted);
@@ -295,9 +340,15 @@ namespace nacar::ui
 
     void BottomBar::paintOutputMeter (juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        // A cut-out in the chassis, not a raised element: deep fill, inner top
-        // shadow, hairline.
-        theme::glassSurface (g, area, meterCorner);
+        // The channel.  theme::recessedWell rather than glassSurface: on a fill
+        // this dark the inner shadow under the top edge does almost nothing,
+        // and the catch of light along the bottom wall - which is what says
+        // "below the surface" rather than "painted on it" - is the half that
+        // reads.  The lip above it is drawn by paint(), on the ceramic.
+        theme::recessedWell (g, area, meterCorner, theme::glassDeep, 1.0f);
+
+        g.setColour (theme::glassEdge.withAlpha (0.85f));
+        g.drawRoundedRectangle (area.reduced (0.5f), meterCorner, 1.0f);
 
         const auto field = area.reduced (meterInset);
 
@@ -328,6 +379,26 @@ namespace nacar::ui
             const int lit = juce::roundToInt (t * (float) meterSegments);
             const float y = field.getY() + (float) ch * (rowH + meterRowGap);
 
+            // The light, before the segments that make it.  Drawn underneath so
+            // the segmentation stays crisp and only the halo spills: a mint run
+            // with nothing around it is a printed bar, and this is supposed to
+            // be a lamp inside a channel.
+            if (lit > 0)
+            {
+                const float runW = (float) lit * (segW + meterSegGap) - meterSegGap;
+                const juce::Rectangle<float> run (field.getX(), y, runW, rowH);
+
+                theme::outerGlow (g, run, 1.5f, theme::mint,
+                                  meterGlowAlpha * (0.5f + t * 0.5f), meterGlowSpread);
+
+                // Brighter where the level actually is.
+                const float tipW = juce::jmin (runW,
+                                               (float) meterTipSegs * (segW + meterSegGap));
+
+                theme::outerGlow (g, run.withLeft (run.getRight() - tipW), 1.5f,
+                                  theme::mint, meterTipAlpha, meterTipSpread);
+            }
+
             for (int s = 0; s < meterSegments; ++s)
             {
                 const juce::Rectangle<float> seg (field.getX() + (float) s * (segW + meterSegGap),
@@ -356,8 +427,8 @@ namespace nacar::ui
                 g.fillRect (seg);
             }
 
-            // A very faint bloom over the lit run: mint is the powered colour,
-            // and a flat fill alone reads as printed rather than lit.
+            // A very faint bloom over the lit run, on top of the segments this
+            // time: light spreading across the gaps between them.
             if (lit > 0)
             {
                 const float runW = (float) lit * (segW + meterSegGap) - meterSegGap;

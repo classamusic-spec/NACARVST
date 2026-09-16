@@ -52,11 +52,93 @@ namespace nacar::ui
     /** Transient ticks sit on the top edge of the field. */
     static constexpr float markerTickHeight = 6.0f;
 
-    /** Alphas for the envelope.  UI spec section 5 asks for ~70 % on the main
-        field and "low contrast" on the overview strip. */
-    static constexpr float mainFillAlpha      = 0.70f;
+    /** Alphas for the envelope.  UI spec section 5 asks for "low contrast" on
+        the overview strip; the main field's own alphas are further down, with
+        the rest of the glow. */
     static constexpr float overviewFillAlpha  = 0.34f;
     static constexpr float selectionFillAlpha = 0.14f;
+
+    // -----------------------------------------------------------------------
+    //  The glow, and what it costs
+    //
+    //  UI spec section 12 lists the waveform among the two things in the
+    //  instrument that genuinely emit, and an emitter is not a bright fill: it
+    //  is a core with light falling off around it.  The cheap way to get that
+    //  without an offscreen blur is to stroke the envelope's own silhouette a
+    //  small, FIXED number of times at decreasing width and increasing alpha.
+    //
+    //  This runs at 30 Hz over an 840 px field, so the layer count is the
+    //  budget and it is stated here rather than left to be counted:
+    //
+    //      2  halo strokes of the closed body path
+    //      1  gradient fill of the body
+    //      2  crest strokes (top and bottom)
+    //      ---
+    //      5  path operations per frame, plus the three paths buildEnvelopePath
+    //         already built.  Two more than the flat fill it replaces.
+    //
+    //  The overview strip gets one soft pass and one fill, because it is read
+    //  as a map of the whole file rather than as a signal.
+    // -----------------------------------------------------------------------
+    static constexpr int   haloPasses = 2;
+    static constexpr float haloWidth[haloPasses] = { 10.0f, 4.5f };
+    static constexpr float haloAlpha[haloPasses] = { 0.085f, 0.16f };
+
+    static constexpr float overviewHaloWidth = 3.0f;
+    static constexpr float overviewHaloAlpha = 0.09f;
+
+    /** The core.
+
+        A lamp is not uniformly bright: it has a hot filament with light falling
+        away from it.  The envelope is mirrored about its centre line, so the
+        centre line is the filament - but only a NARROW band of it, which is why
+        the gradient carries four stops rather than one.  Spread the bright stop
+        over the full height instead and the shape goes back to being a flat
+        lilac fill with a gradient on it, which is what this replaced. */
+    static constexpr float bodyAlpha = 0.56f;   ///< at the crest
+    static constexpr float coreAlpha = 0.78f;   ///< on the centre line
+    static constexpr float coreHalfWidth = 0.090f;   ///< of the field height, each side
+
+    /** Crest stroke along the peaks.  UI spec section 5: a brighter 1 px crest. */
+    static constexpr float crestAlpha         = 0.95f;
+    static constexpr float overviewCrestAlpha = 0.45f;
+
+    // -----------------------------------------------------------------------
+    //  Selection and playhead as light rather than as outlines
+    // -----------------------------------------------------------------------
+
+    /** The selection region is brighter where the light enters it - the top. */
+    static constexpr float selectionTopAlpha = 0.20f;
+
+    /** Half-width and peak alpha of the soft column at each selection edge. */
+    static constexpr float selectionEdgeSpread = 3.0f;
+    static constexpr float selectionEdgeAlpha  = 0.50f;
+    static constexpr float selectionEdgeCore   = 0.85f;
+
+    /** The halo the selection handles throw onto the glass. */
+    static constexpr float handleGlowRadius = 5.0f;
+    static constexpr float handleGlowAlpha  = 0.45f;
+
+    /** Half-width and alpha of the playhead's own column of light.  The core
+        stays the 1 px near-white line the spec asks for. */
+    static constexpr float playheadSpread     = 3.5f;
+    static constexpr float playheadGlowAlpha  = 0.22f;
+
+    // -----------------------------------------------------------------------
+    //  How deep the field is cut
+    // -----------------------------------------------------------------------
+
+    /** Height of the inner shadow under the field's top edge. */
+    static constexpr float wellShadowDepth         = 14.0f;
+    static constexpr float overviewWellShadowDepth = 5.0f;
+
+    /** Alpha of that shadow where it meets the edge. */
+    static constexpr float wellShadowAlpha = 0.55f;
+
+    /** Passed to theme::recessedWell: how hard the bevel and the catch of light
+        on the far wall are driven. */
+    static constexpr float wellDepth         = 1.5f;
+    static constexpr float overviewWellDepth = 0.7f;
 
     /** Type used inside the field.  Layout.h carries no size for these because
         they are states of the field rather than fixed furniture. */
@@ -521,9 +603,7 @@ namespace nacar::ui
         const auto area   = fieldArea();
         const float corner = overview ? overviewCorner : layout::radiusCard;
 
-        // The well.  Glass is a cut-out, so this is fill plus inner shadow plus
-        // hairline - never a drop shadow.
-        theme::glassSurface (g, area, corner, overview ? theme::glassMid : theme::glassDeep);
+        paintWell (g, area, corner);
 
         juce::Graphics::ScopedSaveState saved (g);
         {
@@ -555,12 +635,7 @@ namespace nacar::ui
             juce::Path crestTop, crestBottom;
             const auto body = buildEnvelopePath (area, crestTop, crestBottom);
 
-            g.setColour (theme::violet.withAlpha (overview ? overviewFillAlpha : mainFillAlpha));
-            g.fillPath (body);
-
-            g.setColour (theme::violetLight.withAlpha (overview ? 0.45f : 0.95f));
-            g.strokePath (crestTop,    juce::PathStrokeType (1.0f));
-            g.strokePath (crestBottom, juce::PathStrokeType (1.0f));
+            paintEnvelope (g, area, body, crestTop, crestBottom);
         }
 
         if (hasSelection())
@@ -579,6 +654,113 @@ namespace nacar::ui
 
         if (dragOver)
             paintDropOverlay (g, area);
+    }
+
+    void WaveformView::paintWell (juce::Graphics& g, juce::Rectangle<float> area,
+                                  float corner) const
+    {
+        // ------------------------------------------------------------------
+        //  A hole, not a dark rectangle.
+        //
+        //  UI spec section 12: a recess is darkest on the edge NEAREST the
+        //  light, because that is the wall the light cannot reach, and it
+        //  catches light on the far one.  Getting those two the wrong way round
+        //  is the difference between a well and a patch of black paint.
+        //
+        //  theme::recessedWell draws its inner shadow as four inset strokes,
+        //  which is right for a switch track and reads as a hairline on a field
+        //  160 px tall, so the depth of the cut is a gradient band under the top
+        //  edge and recessedWell supplies the bevel and the catch of light.
+        // ------------------------------------------------------------------
+        const float shadowDepth = overview ? overviewWellShadowDepth : wellShadowDepth;
+        const float depth       = overview ? overviewWellDepth : wellDepth;
+
+        g.setColour (theme::glassDeep);
+        g.fillRoundedRectangle (area, corner);
+
+        {
+            juce::Graphics::ScopedSaveState saved (g);
+
+            juce::Path clip;
+            clip.addRoundedRectangle (area, corner);
+            g.reduceClipRegion (clip);
+
+            g.setGradientFill (juce::ColourGradient (
+                juce::Colours::black.withAlpha (wellShadowAlpha),
+                area.getCentreX(), area.getY(),
+                juce::Colours::transparentBlack,
+                area.getCentreX(), area.getY() + shadowDepth, false));
+
+            g.fillRect (area.withHeight (shadowDepth));
+        }
+
+        // A transparent body, because the fill above is the body: recessedWell
+        // then strokes its walls onto that rather than flattening it back.
+        theme::recessedWell (g, area, corner, juce::Colours::transparentBlack, depth);
+
+        // Spec section 1: every recessed glass element carries a 1 px hairline.
+        // Dimmer than the frame's, so the field reads as a cut inside a cut
+        // rather than as a second box drawn on top of one.
+        g.setColour (theme::glassEdge.withAlpha (0.55f));
+        g.drawRoundedRectangle (area.reduced (0.5f), corner, 1.0f);
+    }
+
+    void WaveformView::paintEnvelope (juce::Graphics& g, juce::Rectangle<float> area,
+                                      const juce::Path& body, const juce::Path& crestTop,
+                                      const juce::Path& crestBottom) const
+    {
+        if (overview)
+        {
+            // One soft pass and a flat fill.  The strip is read as a map of the
+            // whole file, so it wants to be legible at a glance and quiet
+            // enough that the main field above it is obviously the subject.
+            g.setColour (theme::violet.withAlpha (overviewHaloAlpha));
+            g.strokePath (body, juce::PathStrokeType (overviewHaloWidth));
+
+            g.setColour (theme::violet.withAlpha (overviewFillAlpha));
+            g.fillPath (body);
+
+            g.setColour (theme::violetLight.withAlpha (overviewCrestAlpha));
+            g.strokePath (crestTop,    juce::PathStrokeType (1.0f));
+            g.strokePath (crestBottom, juce::PathStrokeType (1.0f));
+            return;
+        }
+
+        // 1. The halo.  Two passes of the envelope's own silhouette, widest and
+        //    faintest first, so light appears to fall away from the shape
+        //    rather than to be drawn around it.  Stroking the closed body path
+        //    puts half of each pass outside the outline, which is the half that
+        //    is doing the work - the inside is covered by the fill below.
+        for (int pass = 0; pass < haloPasses; ++pass)
+        {
+            g.setColour (theme::violet.withAlpha (haloAlpha[pass]));
+            g.strokePath (body, juce::PathStrokeType (haloWidth[pass]));
+        }
+
+        // 2. The body, with a hot core.  The envelope is mirrored about the
+        //    centre line, so the centre line is where an emitter would be
+        //    hottest - but the bright band is deliberately narrow, because a
+        //    fill that is bright everywhere is a fill, not a light.
+        {
+            juce::ColourGradient core (theme::violet.withAlpha (bodyAlpha),
+                                       area.getCentreX(), area.getY(),
+                                       theme::violet.withAlpha (bodyAlpha),
+                                       area.getCentreX(), area.getBottom(), false);
+
+            core.addColour (0.5 - (double) coreHalfWidth, theme::violet.withAlpha (bodyAlpha));
+            core.addColour (0.5, theme::violetLight.withAlpha (coreAlpha));
+            core.addColour (0.5 + (double) coreHalfWidth, theme::violet.withAlpha (bodyAlpha));
+
+            g.setGradientFill (core);
+            g.fillPath (body);
+        }
+
+        // 3. The crest.  UI spec section 5 asks for a brighter 1 px edge along
+        //    the peaks, and it is what stops the halo from softening the shape
+        //    into a smudge.
+        g.setColour (theme::violetLight.withAlpha (crestAlpha));
+        g.strokePath (crestTop,    juce::PathStrokeType (1.0f));
+        g.strokePath (crestBottom, juce::PathStrokeType (1.0f));
     }
 
     void WaveformView::paintEmptyInvitation (juce::Graphics& g, juce::Rectangle<float> area,
@@ -645,26 +827,60 @@ namespace nacar::ui
         if (x1 < area.getX() || x0 > area.getRight())
             return;
 
-        g.setColour (theme::violet.withAlpha (selectionFillAlpha));
-        g.fillRect (juce::Rectangle<float> (x0, area.getY(), juce::jmax (1.0f, x1 - x0),
-                                            area.getHeight()));
+        const juce::Rectangle<float> box (x0, area.getY(), juce::jmax (1.0f, x1 - x0),
+                                          area.getHeight());
 
-        g.setColour (theme::violet);
-        g.fillRect (x0 - 0.5f, area.getY(), 1.0f, area.getHeight());
-        g.fillRect (x1 - 0.5f, area.getY(), 1.0f, area.getHeight());
+        // The region is light falling onto the glass, not a tinted rectangle:
+        // brighter where the light enters it, which is the top, and falling away
+        // downwards.  One light, upper-left, and this obeys it like everything
+        // else - UI spec section 12.
+        {
+            juce::ColourGradient wash (theme::violetLight.withAlpha (selectionTopAlpha),
+                                       box.getCentreX(), area.getY(),
+                                       theme::violet.withAlpha (selectionFillAlpha * 0.5f),
+                                       box.getCentreX(), area.getBottom(), false);
+            g.setGradientFill (wash);
+            g.fillRect (box);
+        }
+
+        // The edges are lit rather than outlined: a soft column with a thin
+        // bright core inside it.  An outline is a line; this is a thickness.
+        for (int edge = 0; edge < 2; ++edge)
+        {
+            const float ex = (edge == 0 ? x0 : x1);
+
+            juce::ColourGradient soft (theme::violet.withAlpha (0.0f),
+                                       ex - selectionEdgeSpread, area.getCentreY(),
+                                       theme::violet.withAlpha (0.0f),
+                                       ex + selectionEdgeSpread, area.getCentreY(), false);
+
+            soft.addColour (0.5, theme::violetLight.withAlpha (selectionEdgeAlpha));
+
+            g.setGradientFill (soft);
+            g.fillRect (ex - selectionEdgeSpread, area.getY(),
+                        selectionEdgeSpread * 2.0f, area.getHeight());
+
+            g.setColour (theme::violetLight.withAlpha (selectionEdgeCore));
+            g.fillRect (ex - 0.5f, area.getY(), 1.0f, area.getHeight());
+        }
 
         if (overview)
             return;
 
-        // Circular grab handles at the top of each edge.
+        // Circular grab handles at the top of each edge, each sitting in its own
+        // small halo so it reads as a lit bead rather than a violet dot.
         const float hy = area.getY() + selectionHandleY;
 
         for (int edge = 0; edge < 2; ++edge)
         {
-            const float hx = (edge == 0 ? x0 : x1);
-            const float r  = selectionHandleRadius + (hoveredHandle == edge ? 1.0f : 0.0f);
+            const float hx      = (edge == 0 ? x0 : x1);
+            const bool  hovered = (hoveredHandle == edge);
+            const float r       = selectionHandleRadius + (hovered ? 1.0f : 0.0f);
 
-            g.setColour (hoveredHandle == edge ? theme::violetLight : theme::violet);
+            theme::glow (g, { hx, hy }, handleGlowRadius + (hovered ? 2.0f : 0.0f),
+                         theme::violet, handleGlowAlpha);
+
+            g.setColour (hovered ? theme::violetLight : theme::violet);
             g.fillEllipse (juce::Rectangle<float> (r * 2.0f, r * 2.0f)
                                .withCentre ({ hx, hy }));
         }
@@ -693,6 +909,21 @@ namespace nacar::ui
 
         if (x < area.getX() - 1.0f || x > area.getRight() + 1.0f)
             return;
+
+        // A column of light with a 1 px near-white core inside it.  The spec
+        // asks for the core; the column is what keeps the playhead reading as
+        // light on the glass rather than as a line drawn across it.
+        const float spread = overview ? playheadSpread * 0.5f : playheadSpread;
+
+        juce::ColourGradient soft (theme::glassInk.withAlpha (0.0f), x - spread, area.getCentreY(),
+                                   theme::glassInk.withAlpha (0.0f), x + spread, area.getCentreY(),
+                                   false);
+
+        soft.addColour (0.5, theme::glassInk.withAlpha (playheadGlowAlpha
+                                                            * (overview ? 0.5f : 1.0f)));
+
+        g.setGradientFill (soft);
+        g.fillRect (x - spread, area.getY(), spread * 2.0f, area.getHeight());
 
         g.setColour (theme::glassInk.withAlpha (overview ? 0.55f : 1.0f));
         g.fillRect (x - 0.5f, area.getY(), 1.0f, area.getHeight());

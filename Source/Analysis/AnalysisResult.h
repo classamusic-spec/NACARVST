@@ -75,5 +75,24 @@ namespace nacar
         {
             return tempo > 0.0 && tempoConfidence >= 0.50f;
         }
+
+        /**
+            Whether the MODE is known, as opposed to the root.
+
+            These are two different questions and conflating them is a real
+            musical error. A bare triad pins its root confidently and says
+            almost nothing about the mode - C-E-G is the first, third and fifth
+            of C major, C lydian and C mixolydian alike. An engine that reads
+            `keyIsUsable()` and then constrains to whichever mode won a coin
+            flip will snap a minor third to a major one, which is the single
+            most audible way to be wrong about a key.
+
+            So a consumer that knows the root but not the mode should permit
+            BOTH thirds rather than choose. `harmony::Context` does this.
+        */
+        bool scaleIsUsable() const noexcept
+        {
+            return keyIsUsable() && scale >= 0 && scaleConfidence >= 0.45f;
+        }
     };
 }

@@ -183,6 +183,15 @@
         BLUR changes the density and decay of the smear but not its
         fundamental spacing.
       - CPU has not been measured.
+      - INTEGRATION NOTE.  NacarEngine gates this engine on shadow_on and does
+        not call it at all while the module is switched off, so the engine
+        never sees the block in which it was turned off and cannot flush its
+        state there.  Turning Shadow off and on again therefore resumes
+        whatever was left in the smear tank rather than starting clean.  The
+        in-engine flush covers the other route (LEVEL reaching zero) because
+        that one does reach process().  The fix belongs in the chain - reset()
+        the module when its enable goes false, or drop the gate and let the
+        engine's own exact early-out do the work - and is one line either way.
 */
 
 namespace nacar

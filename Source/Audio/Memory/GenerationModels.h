@@ -240,7 +240,6 @@ namespace nacar::memory
         };
 
         void updateControl (const StageSettings&, float pulse, float breath) noexcept;
-        forcedinline float resample (Channel&, float x) noexcept;
 
         double sr = 48000.0;
         int    index = 0;

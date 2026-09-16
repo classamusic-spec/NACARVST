@@ -155,7 +155,7 @@ namespace nacar::memory
         // these two normalisers the noise floor would change level as its
         // colour changed, and would change again at 96 kHz.
         const float powerFraction = juce::jlimit (0.01f, 0.95f,
-                                                  kPi * kNoiseColourHz / (float) sr);
+                                                  fx::kPi * kNoiseColourHz / (float) sr);
         noiseLpNorm = 1.0f / std::sqrt (powerFraction);
         noiseHpNorm = 1.0f / std::sqrt (1.0f - powerFraction);
 
@@ -387,7 +387,7 @@ namespace nacar::memory
         // Delay depth for a wanted peak deviation in cents.  Clamped by the
         // delay line, so a very slow drift is shallower than its nominal cents.
         const float wanted = c.wobbleCents * wobbleAmount * (float) sr
-                           / (kCentsPerOctaveScale * kTwoPi * driftHz);
+                           / (kCentsPerOctaveScale * fx::kTwoPi * driftHz);
 
         wobbleSamples = juce::jmin (wobbleMaxDepth, juce::jmax (0.0f, wanted)) * drift;
 

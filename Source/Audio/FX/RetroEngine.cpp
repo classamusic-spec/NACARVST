@@ -72,13 +72,16 @@
     random walk per channel pulls the high end of one channel against the
     other: azimuth.
 
-    NOISE IS NOT A BED.  It takes the colour of the ERA (a band-passed source
-    whose corners are interpolated with everything else), and it is modulated
-    by the material: a gap factor makes it loudest where the signal is not,
-    which is where a real medium's noise actually lives, plus a smaller
-    signal-correlated term because tape's modulation noise rises with level.
-    Impulsive surface events near the acetate end are generated, not looped -
-    there is no vinyl sample anywhere in this file, and no static loop.
+    NOISE IS NOT A BED.  It takes the colour of the ERA - the band-pass corners
+    around it are interpolated with everything else in the profile - and it is
+    modulated by the material through the one mechanism that is physically
+    real: tape's modulation noise, which rises with the recorded level.  It is
+    deliberately not ducked when the music plays.  Ducking a noise floor is a
+    gate, a medium has no gate, and the reason a real medium's noise is most
+    audible in the gaps is masking, which happens in the listener rather than
+    in the code.  Impulsive surface events near the acetate end are generated,
+    not looped - there is no vinyl sample anywhere in this file, and no static
+    loop.
 
     ----------------------------------------------------------------------
     PARAMETER MAPPING
@@ -161,6 +164,17 @@
       * The mono collapse at the ACETATE end reduces stereo width.  That is the
         medium, and reducing width is always safe under 38/40/43, but a patch
         that needs its width back has to leave ERA below about 0.2.
+      * The module outputs 4 ms of silence after prepare() or reset(), because
+        both the dry tap and the wet tap read from a transport that has not
+        been written yet.  It is the same 4 ms as the latency and it only
+        happens once per rate change.
+      * The chain currently calls process() only while retro_on is true, so
+        the transport is not written while the module is switched off and the
+        first 4 ms after switching it back on is whatever was last in the
+        delay line.  This engine already handles being called with the flag
+        false - it writes the transport and leaves the buffer untouched - so
+        the fix is for the chain to call it unconditionally, or to call
+        reset() on the falling edge of the flag.
       * The dropout scheduler is memoryless, so two events can overlap.  In
         practice that reads as one longer event; it is not modelled as such.
       * The resampling grid crossfades with the un-held signal as ERA morphs
@@ -833,15 +847,19 @@ namespace nacar
                 source = ch.noiseHp2.highpass (ch.noiseHp1.highpass (source));
                 source = ch.noiseLp.lowpass (source);
 
-                // Where the noise is allowed to be heard.  A real medium's
-                // noise is loudest in the gaps, and it also has a smaller
-                // component that rides the signal - tape's modulation noise.
-                const float envSlow   = ch.gapEnv.process (std::abs (wet[c]));
-                const float presence  = juce::jmin (1.0f, envSlow * 4.0f);
-                const float gapFactor = fx::lerp (1.0f, 0.35f, presence)
-                                          + presence * 0.45f;
+                // How the noise interacts with the material.  It does NOT
+                // duck when the music starts: a medium's noise floor is not a
+                // gate, and ducking it would be exactly the cheat that makes
+                // an effect sound like a plug-in.  What is modelled instead is
+                // the part that is real - tape's modulation noise, which rises
+                // with the recorded level.  The noise still ends up "most
+                // audible in the gaps", because that is what masking does, and
+                // masking needs no help from the code.
+                const float envSlow  = ch.gapEnv.process (std::abs (wet[c]));
+                const float presence = juce::jmin (1.0f, envSlow * 4.0f);
+                const float noiseFactor = 1.0f + presence * 0.35f;
 
-                float y = wet[c] * trim + source * noiseGain * gapFactor + rumble;
+                float y = wet[c] * trim + source * noiseGain * noiseFactor + rumble;
 
                 y = ch.tilt.process (y, toneP);
                 y = ch.dc.process (y);

@@ -115,7 +115,7 @@ namespace nacar
             fx::OnePoleTPT lowCut;      ///< the medium's low-frequency limit
             fx::OnePoleTPT bandLimit;   ///< its high-frequency limit, modulated by level
             fx::OnePole    levelEnv;    ///< fast: dynamic HF loss and transient rounding
-            fx::OnePole    gapEnv;      ///< slow: where the noise is allowed to be heard
+            fx::OnePole    gapEnv;      ///< slow: drives the modulation-noise term
             fx::ThreeBand  bands;       ///< so channel behaviour never touches the low end
             fx::OnePoleTPT noiseHp1, noiseHp2, noiseLp;
             fx::OnePole    dropGain;    ///< smoothed, because a dropout must never click

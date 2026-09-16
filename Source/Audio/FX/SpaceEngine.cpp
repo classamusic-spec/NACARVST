@@ -204,6 +204,15 @@
       - The quality parameter (ECO / STUDIO / ULTRA) is ignored: this engine
         costs the same in all three.
       - CPU has not been measured.
+      - INTEGRATION NOTE.  NacarEngine gates this engine on space_on and does
+        not call it at all while the module is switched off, so the engine
+        never sees the block in which it was turned off and cannot flush its
+        tail there.  Turning Space off and on again therefore resumes the tail
+        that was in the delay lines rather than starting clean.  The in-engine
+        flush covers the other route (MIX reaching zero) because that one does
+        reach process().  The fix belongs in the chain - reset() the module
+        when its enable goes false, or drop the gate and let the engine's own
+        exact early-out do the work - and is one line either way.
 */
 
 namespace nacar

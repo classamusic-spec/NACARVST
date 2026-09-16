@@ -127,6 +127,11 @@
       * The bit depth is a block-rate constant, so a fast BITS automation moves
         in block-sized steps.  They are steps in the *step size*, not in the
         signal, so they do not click, but a very fast sweep is not smooth.
+      * The chain currently calls process() only while crush_on is true, so the
+        dry line is not written while the module is switched off and the first
+        nine samples after switching it back on are stale.  This engine already
+        handles being called with the flag false, so the fix is for the chain
+        to call it unconditionally or to call reset() when the flag falls.
       * DRIVE at maximum costs between 3 and 8 dB of level on loud material.
         The compensation is exact at small signal and tanh compresses above
         that, so a driven stage that does not get louder has to get quieter.

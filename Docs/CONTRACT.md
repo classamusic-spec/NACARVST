@@ -64,6 +64,38 @@ work around it inside your own files and say so in your report.
 - `juce::Component::setBounds` takes ints. Use `.toNearestInt()` on the layout
   rectangles.
 
+## Audio engines
+
+Every processing engine offers exactly three methods:
+
+```cpp
+void prepare (const EngineSpec&);
+void reset();
+void process (juce::AudioBuffer<float>&, const ParameterRegistry&, const MacroState&);
+```
+
+`process` works in place on a stereo buffer of `macros.numSamples` samples.
+
+```
+Source/Audio/DspCommon.h      delay lines, allpasses, band splits, tilt,
+                              history buffer, tempo tables, dry/wet, guard
+Source/Audio/EngineContext.h  EngineSpec, MacroState, the macro contract
+Source/Audio/Sources/Synth/   the synth core, and the primitives DspCommon
+                              re-exports from it
+```
+
+Do not write a second set of DSP primitives. If `DspCommon.h` is missing
+something genuinely shared, add it there and say so in your report; if it is
+specific to your engine, keep it in your own file.
+
+**Macros.** `MacroState` carries the raw macro positions, a small set of derived
+influences (`age`, `grit`, `movement`, `scale`, `distance`, `wetBias`,
+`widthScale`, `alterAmount`) and per-sample pointers for the LFOs, Breath and
+Pulse. An engine *adds* an influence to its own parameters rather than being
+driven by one, so a patch that sets a control explicitly still wins. Document
+your engine's macro response next to its code — there is no central routing
+table on purpose.
+
 ## Realtime contract (audio code only)
 
 Inside anything reachable from `processBlock`: no heap allocation, no locks, no

@@ -520,22 +520,46 @@ drives it directly.
 ## Known limitations — the honest list
 
 * **Nobody has listened to any of this.** Everything above is a claim about what the code
-  does. No build has been auditioned, nothing measured, no engine A/B'd against a reference.
-* **Retro's bypass edge steps by 4 ms in time, in both directions, and the mix ramp cannot fix
-  it.** The bypassed path is the undelayed input; the active path's dry tap is delayed by the
-  nominal offset, so at the block where the early-out engages or releases the output jumps
-  between `x[n]` and `x[n-192]`. Crush has the same defect at 9 samples. Retro also emits 4 ms
-  of silence after `prepare()` or `reset()`.
-* **Space's off edge is not ramped.** It flushes the network and returns in the same block, so
-  the tail disappears in one sample and the dry gain jumps from the mix's dry leg to unity. The
-  other five ramp their mix to zero before they early-out; Space does not.
-* **A slot the order does not contain is forced off but is also never called**, because the
-  chain iterates `order.count`. Removing a card from the chain view therefore still starves
-  that engine's dry line or history for as long as it is out, and re-adding it plays back
-  whatever was last in there. Muting a card — the case that matters — is handled correctly.
+  does. No build has been auditioned, no engine A/B'd against a reference. What has been
+  measured is composition rather than character: see the test list near the end of this file.
+
+### Fixed since this file was first written
+
+An earlier draft listed four defects that are no longer present, and they are recorded here
+rather than deleted because each cost real debugging and each could come back.
+
+* **Retro's and Crush's bypass edges jumped in TIME**, by 4 ms and 9 samples. The bypassed
+  path is the undelayed input; the active path's own dry tap is that input delayed by the
+  alignment offset, so no amount of ramping the mix could close a gap that was not in gain.
+  Both now crossfade against the live input with a dedicated `engageSm`, which for 4 ms is a
+  tape splice and sounds like one. `Tests/Main.cpp` measures the sample-to-sample step at the
+  off edge against the programme's own: Retro was 43x its steady state, and is now below it.
+* **Space flushed its network and returned in the same block**, so the tail vanished in one
+  sample and the dry leg jumped from its mix gain to unity. It now runs until its smoothed wet
+  has actually reached zero. The same test caught this one on the first run after it was
+  sharpened: 6.3x steady state, now 1.0x.
+* **A slot the order did not contain was forced off but never called**, because the chain
+  iterated `order.count`. Dragging a card out of the chain view starved exactly the history and
+  delay lines the unconditional call exists to keep fed. The chain now runs the absent slots
+  too; they are already forced off, so each takes its own exact-bypass path and does nothing
+  but keep its lines current.
+* **The low-end test did not include Grain**, which is the only engine in the chain that
+  genuinely decorrelates — it pans each grain independently — so the single test standing behind
+  the §38/40/43 claim was not exercising the case the claim exists for. It now enables all nine
+  modules with Grain at full spread, and measures 0.962.
+* **Retro still emits 4 ms of silence after `prepare()` or `reset()`**, because both its dry
+  tap and its wet tap read from a transport that has not been written yet. It is the same 4 ms
+  as its latency and it happens once per rate change.
 * **`applyFxBypass` writes the six `*_on` flags through the same modulation overlay the mod
-  matrix uses, and runs after it**, clearing the override on every live slot, so a matrix
-  routing that targets an FX power flag is silently discarded.
+  matrix uses, and runs after it**, clearing the override on every live slot. The two cannot
+  collide in practice — the MOD page's target menu offers float parameters only, so a routing
+  can never name a power flag — but if that ever changes, this is the line that would silently
+  discard it.
+* **Both `getLatencySamples()` return their delay unconditionally**, and the chain gates the
+  figure on the `*_on` flag. Since the engage crossfade below outlives the flag by about
+  230 ms, the host is told zero for that long while the module is still delaying. Reporting a
+  latency that is wrong for a fifth of a second after a button press was judged better than one
+  that is wrong for as long as the module is on.
 * **Retro's resampling grid aliases and is not oversampled.** Deliberate — it is what a 26 kHz
   12-bit sampler did — but ERA near 1 is not a clean stage, and the grid crossfades with the
   un-held signal as ERA morphs into it rather than the converter's rate sliding, which no real

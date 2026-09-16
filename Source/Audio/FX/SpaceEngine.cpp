@@ -470,14 +470,20 @@ namespace nacar
         if (! prepared || numSamples <= 0 || buffer.getNumChannels() < 1)
             return;
 
-        const float mixParam = registry.raw (PID::spaceMix);
+        // The parameter is the gate, not the parameter plus the macro.  A
+        // patch that asks for no reverb gets none however far World is turned
+        // up: World may colour an effect, it may not summon one.
+        const bool  wantOn   = registry.flag (PID::spaceOn);
+        const float mixParam = wantOn ? registry.raw (PID::spaceMix) : 0.0f;
 
-        // -- exact bypass ---------------------------------------------------
-        //  The parameter is the gate, not the parameter plus the macro.  A
-        //  patch that asks for no reverb gets none however far World is turned
-        //  up: World may colour an effect, it may not summon one.  Returning
-        //  here leaves the buffer untouched, sample for sample.
-        if (! registry.flag (PID::spaceOn) || mixParam <= 1.0e-5f)
+        // -- exact bypass, ONCE THE WET HAS RAMPED OUT ----------------------
+        //  Switching off used to return here immediately, which took the tail
+        //  away inside one sample and jumped the dry leg from its mix gain to
+        //  unity at the same time.  Of the six chain modules this was the
+        //  loudest edge left, and a unit test now measures it.  The engine
+        //  keeps running until the smoothed wet has actually reached zero, and
+        //  only then leaves the buffer untouched, sample for sample.
+        if (mixParam <= 1.0e-5f && sWet.value <= 1.0e-4f)
         {
             if (running)
             {
@@ -486,6 +492,12 @@ namespace nacar
                 // transition, never per block.
                 flushNetwork();
                 running = false;
+
+                // The ramp has arrived, so the dry leg is already at unity;
+                // snapping the pair here keeps the untouched-buffer path and
+                // the ramped path agreeing to the sample.
+                sDry.snap (1.0f);
+                sWet.snap (0.0f);
             }
 
             return;

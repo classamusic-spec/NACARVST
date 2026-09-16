@@ -1417,6 +1417,136 @@ struct ChainTests : juce::UnitTest
             }
         }
 
+        beginTest ("switching a module off does not click");
+        {
+            // This is the test that would have caught two separate defects.
+            //
+            // The first was gain: four engines glided their mix UP over 25 ms
+            // and dropped it in one sample on the way down.  The second was
+            // subtler and a ramp on the mix could never have fixed it - Retro's
+            // bypassed output is the live input while its active output's own
+            // dry tap is that input delayed by four milliseconds, so the two
+            // are apart in TIME and the switch jumped between them however
+            // gently the wet was removed.
+            //
+            // Measuring the sample-to-sample step catches both, because both
+            // are discontinuities and neither is anything else.
+            struct Module { const char* name; PID power; };
+
+            const Module modules[] = {
+                { "Retro",  PID::retroOn   },
+                { "Crush",  PID::crushOn   },
+                { "Filter", PID::fxFilterOn },
+                { "Rewind", PID::rewindOn  },
+                { "Grain",  PID::grainFxOn },
+                { "Space",  PID::spaceOn   },
+            };
+
+            for (const auto& module : modules)
+            {
+                TestHost host;
+                silenceTheChain (host);
+                host.registry.setFromUI (module.power, 1.0f);
+
+                // A SINE, and nothing that could add an edge to it.  The
+                // metric below is the sample-to-sample step, and a saw's own
+                // reset edge is larger than any click a module could make - a
+                // rich source hides exactly the defect this is looking for.
+                host.registry.setFromUI (PID::oscAWave, 0.0f);    // SINE
+                host.registry.setFromUI (PID::oscALevel, 0.8f);
+                host.registry.setFromUI (PID::oscBLevel, 0.0f);
+                host.registry.setFromUI (PID::oscCLevel, 0.0f);
+                host.registry.setFromUI (PID::subLevel, 0.0f);
+                host.registry.setFromUI (PID::noiseLevel, 0.0f);
+                host.registry.setFromUI (PID::bodyAmount, 0.0f);
+                host.registry.setFromUI (PID::densityAmount, 0.0f);
+                host.registry.setFromUI (PID::preFilterDrive, 0.0f);
+                host.registry.setFromUI (PID::postSaturation, 0.0f);
+                host.registry.setFromUI (PID::filterCutoff, 18000.0f);
+                host.registry.setFromUI (PID::filterResonance, 0.0f);
+
+                // A steady tone, so any step in the output is the module's and
+                // not the note's.
+                host.registry.setFromUI (PID::ampAttack, 0.004f);
+                host.registry.setFromUI (PID::ampSustain, 1.0f);
+                host.registry.setFromUI (PID::ampDecay, 0.05f);
+                host.registry.setFromUI (PID::voiceMode, 1.0f);   // MONO
+
+                NacarEngine engine;
+                engine.prepare (48000.0, 256, 2);
+
+                const int blockSize = 256;
+                const int blocks    = 240;
+                const int switchAt  = 120;
+
+                juce::AudioBuffer<float> out (2, blockSize * blocks);
+                out.clear();
+
+                juce::AudioBuffer<float> block (2, blockSize);
+
+                TransportInfo transport;
+                transport.bpm = 120.0;
+                transport.playing = true;
+
+                for (int b = 0; b < blocks; ++b)
+                {
+                    if (b == switchAt)
+                        host.registry.setFromUI (module.power, 0.0f);
+
+                    block.clear();
+                    juce::MidiBuffer midi;
+
+                    if (b == 0)
+                        midi.addEvent (juce::MidiMessage::noteOn (1, 45, 0.9f), 0);
+
+                    engine.process (block, midi, host.registry, transport);
+                    transport.ppqPosition += (double) blockSize / 48000.0 * 2.0;
+
+                    for (int ch = 0; ch < 2; ++ch)
+                        out.copyFrom (ch, b * blockSize, block, ch, 0, blockSize);
+                }
+
+                // The signal's own worst step, taken from a settled stretch well
+                // before the switch.  Using the programme rather than a fixed
+                // number means the threshold cannot drift as the synth changes.
+                auto worstStepIn = [&out] (int from, int to)
+                {
+                    float worst = 0.0f;
+
+                    for (int i = juce::jmax (1, from); i < to; ++i)
+                        worst = juce::jmax (worst,
+                                            std::abs (out.getSample (0, i) - out.getSample (0, i - 1)),
+                                            std::abs (out.getSample (1, i) - out.getSample (1, i - 1)));
+
+                    return worst;
+                };
+
+                const int at = switchAt * blockSize;
+
+                const float steady = worstStepIn (at - blockSize * 40, at - blockSize * 4);
+
+                // Seventy blocks, not eight.  These fades are exponential with
+                // a 20-25 ms time constant against a 1e-4 threshold, so the
+                // moment the early-out finally engages - which is where any
+                // remaining discontinuity lives - is around 230 ms after the
+                // button, not 40.  A short window measures the fade and misses
+                // the thing the fade exists to hide.
+                const float atEdge = worstStepIn (at - 8, at + blockSize * 70);
+
+                logMessage ("    " + juce::String (module.name).paddedRight (' ', 7)
+                                + " step at the off edge " + juce::String (atEdge, 5)
+                                + " against a steady-state worst of " + juce::String (steady, 5));
+
+                // Four times the programme's own worst step.  A click is a
+                // different order of magnitude, not a small multiple: with the
+                // engage crossfade removed, Retro's four-millisecond time jump
+                // measures about seventy times its steady state on this patch.
+                expect (atEdge <= juce::jmax (1.0e-4f, steady * 4.0f),
+                        juce::String (module.name) + " clicks when it is switched off: "
+                            + juce::String (atEdge, 5) + " against " + juce::String (steady, 5));
+            }
+        }
+
         beginTest ("muting a card is the same thing as switching it off");
         {
             // The chain has two ways to silence a module - the power ring, which
@@ -1506,13 +1636,26 @@ struct ChainTests : juce::UnitTest
         beginTest ("the chain does not decorrelate the low end");
         {
             // Specification sections 38, 40 and 43: width is never bought at
-            // the cost of the low end.  Six stereo processes in series is where
-            // that is most likely to be lost.
+            // the cost of the low end.  A stack of stereo processes in series
+            // is where that is most likely to be lost.
+            //
+            // EVERY module, including the three that used to be left out.
+            // Grain is the omission that mattered: it is the only engine in the
+            // chain that genuinely decorrelates - it pans each grain
+            // independently - so the one test standing behind the low-end claim
+            // was not exercising the case the claim exists for.
             TestHost host;
 
-            for (auto pid : { PID::retroOn, PID::fxFilterOn, PID::spaceOn,
+            for (auto pid : { PID::retroOn, PID::crushOn, PID::fxFilterOn,
+                              PID::rewindOn, PID::grainFxOn, PID::spaceOn,
                               PID::auraOn, PID::shadowOn, PID::patinaOn })
                 host.registry.setFromUI (pid, 1.0f);
+
+            // Grain at a spread that would decorrelate anything it is allowed
+            // to, so the low-band protection is being asked a real question.
+            host.registry.setFromUI (PID::grainSpread, 1.0f);
+            host.registry.setFromUI (PID::grainMix, 0.8f);
+            host.registry.setFromUI (PID::grainDensity, 0.8f);
 
             host.registry.setFromUI (PID::macroWorld, 1.0f);
             host.registry.setFromUI (PID::macroMemory, 0.8f);

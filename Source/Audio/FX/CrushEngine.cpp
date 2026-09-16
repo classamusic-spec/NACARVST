@@ -234,7 +234,8 @@ namespace nacar
 
         rng.setSeed (0x43525348u);      // 'CRSH'
 
-        for (auto* s : { &crushSm, &bitsSm, &rateSm, &jitterSm, &driveSm, &toneSm, &mixSm })
+        for (auto* s : { &engageSm, &crushSm, &bitsSm, &rateSm, &jitterSm, &driveSm,
+                         &toneSm, &mixSm })
             s->reset();
 
         driveRamp.snap (1.0f);
@@ -265,23 +266,24 @@ namespace nacar
         float* left  = buffer.getWritePointer (0);
         float* right = numCh > 1 ? buffer.getWritePointer (1) : left;
 
-        const bool enabled = params.flag (PID::crushOn);
+        const bool  enabled = params.flag (PID::crushOn);
+        const float mixP    = juce::jlimit (0.0f, 1.0f, params.raw (PID::crushMix));
 
-        // Switching off ramps to zero mix rather than jumping to it; the
-        // smoother below reaches the target over the same time the on edge
-        // takes.  A bit crusher's wet signal is nothing like its dry one, so
-        // an instant swap in either direction is a step.
-        const float mixP = enabled ? juce::jlimit (0.0f, 1.0f, params.raw (PID::crushMix))
-                                   : 0.0f;
+        // Switching off is a crossfade against the live input, not a ramp on
+        // MIX.  At MIX 0 this module's output is its own dry tap, which is the
+        // input delayed by nine samples; the bypassed output is the input.
+        // Ramping the gain between two signals that are apart in TIME leaves
+        // the step exactly where it was.
+        const float engageTarget = enabled ? 1.0f : 0.0f;
 
         // -------------------------------------------------------------------
-        //  BYPASS IS EXACT, ONCE THE RAMP HAS ARRIVED.  The buffer is
+        //  BYPASS IS EXACT, ONCE THE CROSSFADE HAS RUN OUT.  The buffer is
         //  untouched.  The dry lines are still written, because the dry path is
         //  delayed by the halfband's latency: if the line went stale while the
         //  module was off, the first samples after it came back on would be
         //  nine samples of whatever was playing when it was switched off.
         // -------------------------------------------------------------------
-        if (mixP <= 0.0f && mixSm.current <= 1.0e-4f)
+        if (engageTarget <= 0.0f && engageSm.current <= 1.0e-4f)
         {
             for (int i = 0; i < n; ++i)
             {
@@ -289,7 +291,8 @@ namespace nacar
                 channels[1].dry.write (right[i]);
             }
 
-            mixSm.holdAt (0.0f);
+            engageSm.holdAt (0.0f);
+            mixSm.holdAt (mixP);
             return;
         }
 
@@ -363,6 +366,7 @@ namespace nacar
 
         // -- dry / wet --------------------------------------------------------
         mixSm.set (mixP, n, coef);
+        engageSm.set (engageTarget, n, coef);
 
         {
             float dg0, wg0, dg1, wg1;
@@ -448,6 +452,12 @@ namespace nacar
                 const float dry = ch.dry.readInt (kDryTap);
 
                 out[c] = fx::guard (dry * dryRamp.at (i) + y * wetRamp.at (i));
+
+                // The engage crossfade, against the live input.
+                const float engage = juce::jlimit (0.0f, 1.0f, engageSm.at (i));
+
+                if (engage < 1.0f)
+                    out[c] = fx::guard (fx::lerp (in[c], out[c], engage));
             }
 
             if (numCh > 1)

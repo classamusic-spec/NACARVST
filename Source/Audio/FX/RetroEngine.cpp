@@ -431,9 +431,9 @@ namespace nacar
         // produces the same samples the realtime pass did.
         rng.setSeed (0x52455452u);      // 'RETR'
 
-        for (auto* s : { &eraSm, &satSm, &noiseSm, &monoSm, &trimSm, &digitalSm,
-                         &resampleSm, &rumbleSm, &hfLossSm, &mixSm, &wowExcSm,
-                         &flutterExcSm, &scrapeExcSm, &crackleSm })
+        for (auto* s : { &engageSm, &eraSm, &satSm, &noiseSm, &monoSm, &trimSm,
+                         &digitalSm, &resampleSm, &rumbleSm, &hfLossSm, &mixSm,
+                         &wowExcSm, &flutterExcSm, &scrapeExcSm, &crackleSm })
             s->reset();
 
         dryRamp.snap (1.0f);
@@ -456,24 +456,33 @@ namespace nacar
         float* left  = buffer.getWritePointer (0);
         float* right = numCh > 1 ? buffer.getWritePointer (1) : left;
 
-        const bool enabled = params.flag (PID::retroOn);
-
-        // Switching off is a ramp to zero mix, not a jump to it.  MIX defaults
-        // to 1.0, so an instant bypass replaces the entire output in one sample
-        // - the loudest click any control in the module can make.  Setting the
-        // target here and letting the smoother below reach it means the off
-        // edge glides over the same 25 ms the on edge does.
-        const float mixP = enabled ? juce::jlimit (0.0f, 1.0f, params.raw (PID::retroMix))
-                                   : 0.0f;
+        const bool  enabled = params.flag (PID::retroOn);
+        const float mixP    = juce::jlimit (0.0f, 1.0f, params.raw (PID::retroMix));
 
         // -------------------------------------------------------------------
-        //  BYPASS IS EXACT, ONCE THE RAMP HAS ARRIVED.  The output buffer is
-        //  not touched at all - but the transport keeps being written, so that
-        //  un-bypassing does not play back whatever happened to be in the delay
-        //  line when it was switched off.  Two stores per sample is a cheap way
-        //  to make the module safe to automate.
+        //  SWITCHING OFF IS A CROSSFADE, NOT A JUMP.
+        //
+        //  A ramp on MIX is not sufficient here and it took a second review to
+        //  see why.  At MIX 0 this module's output is its own dry tap, which is
+        //  the input delayed by nominalDelay; the bypassed output is the input
+        //  itself.  They are four milliseconds apart in TIME, so however gently
+        //  the wet is removed, the moment the early-out engages the output
+        //  jumps four milliseconds - and it jumps back on the way in.
+        //
+        //  So the fade is between the whole module and the live input, at the
+        //  very end.  Crossfading two copies of a signal four milliseconds
+        //  apart is what a tape splice is, and it sounds like one.
         // -------------------------------------------------------------------
-        if (mixP <= 0.0f && mixSm.current <= 1.0e-4f)
+        const float engageTarget = enabled ? 1.0f : 0.0f;
+
+        // -------------------------------------------------------------------
+        //  BYPASS IS EXACT, ONCE THE CROSSFADE HAS RUN OUT.  The output buffer
+        //  is not touched at all - but the transport keeps being written, so
+        //  that un-bypassing does not play back whatever happened to be in the
+        //  delay line when it was switched off.  Two stores per sample is a
+        //  cheap way to make the module safe to automate.
+        // -------------------------------------------------------------------
+        if (engageTarget <= 0.0f && engageSm.current <= 1.0e-4f)
         {
             for (int i = 0; i < n; ++i)
             {
@@ -481,7 +490,8 @@ namespace nacar
                 channels[1].line.write (right[i]);
             }
 
-            mixSm.holdAt (0.0f);
+            engageSm.holdAt (0.0f);
+            mixSm.holdAt (mixP);
             return;
         }
 
@@ -598,6 +608,7 @@ namespace nacar
         // per sample, and the deviation from equal power inside one block is
         // far below anything audible.
         mixSm.set (mixP, n, coef);
+        engageSm.set (engageTarget, n, coef);
 
         {
             float d0, w0, d1, w1;
@@ -727,6 +738,12 @@ namespace nacar
             float highBand[2] = { 0.0f, 0.0f };
             float dryTap[2]   = { 0.0f, 0.0f };
             float wet[2]      = { 0.0f, 0.0f };
+
+            // Captured before anything writes to the buffer: this is the
+            // undelayed signal the bypassed path would have produced, and the
+            // engage crossfade at the bottom needs it.
+            const float liveL = left[i];
+            const float liveR = numCh > 1 ? right[i] : left[i];
 
             for (int c = 0; c < 2; ++c)
             {
@@ -880,8 +897,18 @@ namespace nacar
             const float dry     = dryRamp.at (i);
             const float wetGain = wetRamp.at (i);
 
-            const float outL = fx::guard (dryTap[0] * dry + wet[0] * wetGain);
-            const float outR = fx::guard (dryTap[1] * dry + wet[1] * wetGain);
+            float outL = fx::guard (dryTap[0] * dry + wet[0] * wetGain);
+            float outR = fx::guard (dryTap[1] * dry + wet[1] * wetGain);
+
+            // The engage crossfade, against the LIVE input rather than the
+            // delayed dry tap.  See the note at the top of this function.
+            const float engage = juce::jlimit (0.0f, 1.0f, engageSm.at (i));
+
+            if (engage < 1.0f)
+            {
+                outL = fx::guard (fx::lerp (liveL, outL, engage));
+                outR = fx::guard (fx::lerp (liveR, outR, engage));
+            }
 
             if (numCh > 1)
             {

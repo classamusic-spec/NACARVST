@@ -38,7 +38,15 @@ namespace nacar
             The transport's read head sits at a centre tap so that it can wander
             either side of it, and the dry path is read from the same tap so
             that dry and wet stay aligned.  That alignment is what costs the
-            delay.  Zero while bypassed - the buffer is not touched at all. */
+            delay.
+
+            ALWAYS the alignment delay, whatever the module's state: this has
+            no way to know the flag and the chain already gates it on retro_on.
+            The one imprecision that leaves is the engage crossfade below - for
+            the 25 ms it takes to run out, the chain has already told the host
+            zero while this module is still delaying.  Reporting a latency that
+            is wrong for 25 ms after a button press is better than reporting one
+            that is wrong for as long as the module is on. */
         int getLatencySamples() const noexcept;
 
     private:
@@ -162,6 +170,15 @@ namespace nacar
 
         fx::Rng rng;
         int controlCounter = 0;
+
+        /** The engage crossfade.  MIX alone is not enough to make this module
+            safe to switch: the bypassed output is the live input, while the
+            active output's own dry tap is that input delayed by nominalDelay,
+            so the two are four milliseconds apart IN TIME and no amount of
+            gain ramping closes that.  The fix is to crossfade between them -
+            which for four milliseconds is a tape splice, and sounds like one
+            rather than like a click. */
+        Smoothed engageSm;
 
         Smoothed eraSm, satSm, noiseSm, monoSm, trimSm, digitalSm, resampleSm,
                  rumbleSm, hfLossSm, mixSm, wowExcSm, flutterExcSm, scrapeExcSm,

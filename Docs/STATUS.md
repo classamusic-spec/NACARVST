@@ -91,12 +91,25 @@ Grain need their history written continuously or engaging them plays silence.
 Gating the calls at the chain level took the silent-chain test from −10.7 dB to
 −145.9 dB when it was removed.
 
-The card's mute glyph works the same way. It used to skip the call — the same
-mistake, made a second time through a different control — so muting a card and
-switching it off produced different audio and different reported latency. The
-chain now applies the mute by forcing the module's own power flag, so there is
-one code path. Two tests assert the two routes agree: to −120 dB in the audio,
-and exactly in the latency the chain reports.
+The card's mute glyph works the same way, and so does dragging a card out of
+the chain entirely. Both used to skip the call — the same mistake, made twice
+more through different controls — so muting a card and switching it off gave
+different audio and different reported latency, and removing a card starved
+exactly the history the unconditional call exists to keep fed. The chain now
+forces the module's own power flag instead, and runs the absent slots too.
+Two tests assert the routes agree: to −120 dB in the audio, and exactly in the
+latency the chain reports.
+
+**No module clicks when it is switched off**, and a test measures it. All six
+used to. Four ramped their mix up over 25 ms and dropped it in one sample on
+the way down; Space flushed its tail and returned in the same block; and Retro
+and Crush had a subtler failure a mix ramp could never have fixed — their
+bypassed output is the live input while their active output's own dry tap is
+that input delayed by the alignment offset, so the two are four milliseconds
+apart *in time*. Both now crossfade against the live input. The test renders a
+sine through each module, switches it off mid-render, and compares the
+sample-to-sample step at the edge against the programme's own: Retro measured
+43× its steady state before the crossfade and measures 0.8× after.
 
 **The modulation is live.** Two LFOs, Breath, Pulse and an Organic Random
 source, all at sample rate, plus an eight-slot matrix whose routings now reach
@@ -166,9 +179,11 @@ Headline numbers, through the whole chain at its defaults:
 | Peak level, loudest of 29 | −5.3 dBFS |
 | Peak level, INIT patch | −12.7 dBFS |
 | Silent chain vs. dry | −145.9 dB |
-| CPU, 1 voice, whole chain | 12.3 % of one core |
-| CPU, 16 voices × 4 unison, whole chain | 62.3 % of one core |
-| CPU, the chain's own fixed cost | ≈ 9.5 % of one core per instance |
+| Low-band correlation, all nine modules on, Grain at full spread | 0.96 |
+| Worst off-edge step, any of the six FX modules | below its own steady state |
+| CPU, 1 voice, whole chain | 13.2 % of one core |
+| CPU, 16 voices × 4 unison, whole chain | 62.2 % of one core |
+| CPU, the chain's own fixed cost | ≈ 10 % of one core per instance |
 
 Bare synth, for comparison: 2.9 % of a core for one voice, 52.7 % at 16 × 4,
 and 126.6 % at 32 × 8 — which is over realtime and is stated as a limitation

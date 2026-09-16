@@ -31,7 +31,13 @@ namespace nacar
 
         /** Samples of latency the module adds while it is active: the round
             trip through the oversampling halfband, which the dry path is
-            delayed to match.  Zero while bypassed. */
+            delayed to match.
+
+            ALWAYS those nine samples, whatever the module's state: this has no
+            way to know the flag and the chain already gates it on crush_on.
+            The imprecision that leaves is the engage crossfade - for the ~230 ms
+            it takes to run out, the chain has already told the host zero while
+            this module is still delaying. */
         int getLatencySamples() const noexcept;
 
     private:
@@ -101,6 +107,13 @@ namespace nacar
         float holdPeriod = 1.0f;
 
         fx::Rng rng;
+
+        /** The engage crossfade, against the LIVE input.  The same reasoning
+            as Retro's, at a ninth of the distance: bypassed output is the
+            input, active output's dry tap is the input delayed by the
+            halfband's nine samples, and no amount of mix ramping closes a gap
+            that is in time rather than in gain. */
+        Smoothed engageSm;
 
         Smoothed crushSm, bitsSm, rateSm, jitterSm, driveSm, toneSm, mixSm;
 

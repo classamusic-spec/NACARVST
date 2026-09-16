@@ -335,6 +335,11 @@ namespace nacar
                 for (int j = 0; j < order.count && ! reached; ++j)
                     reached = order.slots[(size_t) j] == slot;
 
+                // The overlay is shared with the mod matrix, and this write
+                // wins.  In practice the two cannot collide: the MOD page's
+                // target menu offers float parameters only, so a routing can
+                // never name a power flag.  If that ever changes, this is the
+                // line that would silently discard it.
                 if (reached && ! order.isBypassed (slot))
                     p.clearModulation (pid);
                 else
@@ -570,6 +575,29 @@ namespace nacar
             // runFxSlot and applyFxBypass above for why there is no `if` here.
             for (int i = 0; i < order.count; ++i)
                 runFxSlot (order.slots[(size_t) i], view, p, macros);
+
+            // And then the slots the order does not contain, for the same
+            // reason.  Removing a card from the chain view used to stop its
+            // engine being called at all, which starves exactly the history and
+            // delay lines the unconditional call above exists to keep fed - so
+            // dragging a card out and back in produced the click that dragging
+            // it out was supposed to avoid.  applyFxBypass has already forced
+            // each of these off, so every one takes its own exact-bypass path
+            // and does nothing but keep its lines current.  Their order among
+            // themselves is irrelevant: a bypassed engine does not touch the
+            // buffer.
+            for (int i = 0; i < numFxSlots; ++i)
+            {
+                const auto slot = (FxSlot) i;
+
+                bool inOrder = false;
+
+                for (int j = 0; j < order.count && ! inOrder; ++j)
+                    inOrder = order.slots[(size_t) j] == slot;
+
+                if (! inOrder)
+                    runFxSlot (slot, view, p, macros);
+            }
 
             shadow.process (view, p, macros);
             aura.process   (view, p, macros);

@@ -544,13 +544,13 @@ namespace nacar::ui
                                  && (synthSource == nullptr || ! synthSource->hasSignal());
 
         if (kind == SourceKind::none || monitorIdle)
-            paintEmptyInvitation (g, area);
+            paintEmptyInvitation (g, area, monitorIdle);
 
         if (kind == SourceKind::pendingSample)
         {
             paintPendingSample (g, area);
         }
-        else if (kind != SourceKind::none && displayEnvelope.size() > 1)
+        else if (kind != SourceKind::none && ! monitorIdle && displayEnvelope.size() > 1)
         {
             juce::Path crestTop, crestBottom;
             const auto body = buildEnvelopePath (area, crestTop, crestBottom);
@@ -581,18 +581,37 @@ namespace nacar::ui
             paintDropOverlay (g, area);
     }
 
-    void WaveformView::paintEmptyInvitation (juce::Graphics& g, juce::Rectangle<float> area) const
+    void WaveformView::paintEmptyInvitation (juce::Graphics& g, juce::Rectangle<float> area,
+                                             bool monitoringSynth) const
     {
         if (overview || area.getHeight() < dropTextSize * 3.0f)
             return;
 
-        const auto f = theme::label (dropTextSize);
+        const auto big   = theme::label (dropTextSize);
+        const auto small = theme::label (noteTextSize);
 
+        // Two different silences.  With no source at all, dropping a file is
+        // the thing to do.  With the synth selected there is nothing to drop -
+        // the viewport is showing the instrument's own output and it is simply
+        // not playing - so telling the reader to drop audio would be an
+        // invitation to do something that does not apply.
+        const auto line1 = monitoringSynth ? "NO SIGNAL" : "DROP AUDIO";
+        const auto line2 = monitoringSynth ? "THIS IS THE INSTRUMENT'S OWN OUTPUT"
+                                           : "WAV  AIFF  MP3  FLAC";
+
+        // Clear of the centre rule on both sides: the rule runs through the
+        // exact middle, and type sitting on it reads as a strikethrough.
         g.setColour (theme::glassInkFaint);
-        theme::drawTracked (g, "DROP AUDIO",
-                            { area.getX(), area.getCentreY() - f.getHeight() * 0.5f,
-                              area.getWidth(), f.getHeight() },
-                            f, dropTextTrack, juce::Justification::horizontallyCentred);
+        theme::drawTracked (g, line1,
+                            { area.getX(), area.getCentreY() - big.getHeight() * 1.5f,
+                              area.getWidth(), big.getHeight() },
+                            big, dropTextTrack, juce::Justification::horizontallyCentred);
+
+        g.setColour (theme::glassInkFaint.withAlpha (0.6f));
+        theme::drawTracked (g, line2,
+                            { area.getX(), area.getCentreY() + small.getHeight() * 0.8f,
+                              area.getWidth(), small.getHeight() },
+                            small, dropTextTrack, juce::Justification::horizontallyCentred);
     }
 
     void WaveformView::paintPendingSample (juce::Graphics& g, juce::Rectangle<float> area) const

@@ -31,6 +31,12 @@ GENERATE → REMEMBER → MOVE → BREAK → REARRANGE → PLACE → WEIGHT → 
 - **AURA · SHADOW · BREATH · PATINA** — atmosphere, afterimage, organic
   movement, age
 
+## What it looks like
+
+![NÁCAR](Docs/screenshots/main.png)
+
+More in [Docs/screenshots](Docs/screenshots).
+
 ## Repository layout
 
 ```

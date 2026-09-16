@@ -170,7 +170,8 @@ namespace nacar::ui
         juce::Path buildEnvelopePath (juce::Rectangle<float> area, juce::Path& crestTop,
                                       juce::Path& crestBottom) const;
 
-        void paintEmptyInvitation (juce::Graphics&, juce::Rectangle<float> area) const;
+        void paintEmptyInvitation (juce::Graphics&, juce::Rectangle<float> area,
+                                   bool monitoringSynth) const;
         void paintPendingSample (juce::Graphics&, juce::Rectangle<float> area) const;
         void paintSelection (juce::Graphics&, juce::Rectangle<float> area) const;
         void paintMarkers (juce::Graphics&, juce::Rectangle<float> area) const;

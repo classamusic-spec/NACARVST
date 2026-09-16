@@ -55,5 +55,11 @@ namespace nacar::synth
         float triState    = 0.0f;
         float triLeak     = 0.9995f;
         float pendingBlep = 0.0f;
+
+        // The integrator's near-DC gain is enormous, so its output is
+        // high-passed.  Without this, anything that puts a low-frequency term
+        // into the square - phase modulation above all - comes back out as
+        // subsonic energy large enough to swamp the note itself.
+        DcBlocker triDc;
     };
 }

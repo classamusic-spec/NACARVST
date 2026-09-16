@@ -25,7 +25,6 @@ namespace nacar
         : processor (p), host (h)
     {
         setOpaque (true);
-        setSize (canvasWidth, canvasHeight);
 
         headerBar       = std::make_unique<ui::HeaderBar>       (processor, host);
         macroPanel      = std::make_unique<ui::MacroPanel>      (processor, host);
@@ -58,6 +57,10 @@ namespace nacar
         bottomBar->setVisible (true);
 
         refreshPage (ui::Page::main);
+
+        // Last, not first: setSize() calls resized(), and resized() places the
+        // children that are only just above this line.
+        setSize (canvasWidth, canvasHeight);
     }
 
     NacarCanvas::~NacarCanvas() = default;
@@ -96,6 +99,12 @@ namespace nacar
 
     void NacarCanvas::resized()
     {
+        // A component's size can be set before its children exist - the JUCE
+        // standalone wrapper resizes the editor from inside its own
+        // constructor - so this never assumes they do.
+        if (headerBar == nullptr || bottomBar == nullptr || presetBrowser == nullptr)
+            return;
+
         // Region accessors on this class share names with the layout rects, so
         // the layout namespace is spelled out here on purpose.
         headerBar      ->setBounds (layout::header     .toNearestInt());
@@ -118,6 +127,9 @@ namespace nacar
 
     void NacarCanvas::refreshPage (ui::Page page)
     {
+        if (opticalViewport == nullptr)
+            return;
+
         const bool isMain = (page == ui::Page::main);
 
         opticalViewport->setVisible (isMain);

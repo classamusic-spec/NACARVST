@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SynthCommon.h"
+#include "SynthEngine.h"                      // Character and Quality live here
 #include "../../../Plugin/ParameterRegistry.h"
 
 namespace nacar::synth

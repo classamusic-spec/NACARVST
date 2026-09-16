@@ -148,8 +148,33 @@ namespace nacar::ui
         /** Places one knob by hand, without touching the cursor. */
         static void placeKnob (NacarKnob&, juce::Rectangle<int> cell, float knobRadius);
 
+        /** The box a cap of this radius needs.  Taller than wide: the cap hangs
+            from the top and the label sits underneath it, inside the bounds. */
+        static int knobBoxWidth (float knobRadius) noexcept;
+        static int knobBoxHeight (float knobRadius) noexcept;
+
+        /** The groove NacarKnob leaves around its cap, which the box must
+            contain.  Mirrors knobSeatAllowance in Widgets.cpp. */
+        static constexpr float knobSeatAllowance = 7.0f;
+
         /** Advances the cursor past knobs placed by hand. */
         void skipKnobs (int count) noexcept { gridCursor += count; }
+
+        // -- parameter target menus -----------------------------------------
+        //  The MOD matrix and the SEQ lanes both need to point at "some
+        //  parameter", so the menu is built once, here, from the parameter
+        //  table itself - it can never drift from the parameters that exist.
+
+        /** Builds a grouped menu of every float parameter.  Item 1 is
+            NO TARGET; every other item id is (int) pid + 2. */
+        static void buildParameterMenu (juce::PopupMenu&, const juce::String& currentParameterId);
+
+        /** Turns a menu result into a stored target: "" for no target,
+            otherwise the parameter's permanent string ID. */
+        static juce::String parameterMenuResult (int menuItemId);
+
+        /** Display name for a stored target ID. */
+        static juce::String parameterDisplayName (const juce::String& parameterId);
 
         // -- palette --------------------------------------------------------
         juce::Colour ink()      const noexcept;   ///< primary type

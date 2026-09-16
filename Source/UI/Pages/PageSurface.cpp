@@ -295,6 +295,71 @@ namespace nacar::ui
     }
 
     // -----------------------------------------------------------------------
+    //  Parameter target menus
+    // -----------------------------------------------------------------------
+    void PageSurface::buildParameterMenu (juce::PopupMenu& menu, const juce::String& currentId)
+    {
+        menu.addItem (1, "NO TARGET", true, currentId.isEmpty());
+        menu.addSeparator();
+
+        juce::PopupMenu group;
+        juce::String groupName;
+
+        auto flush = [&menu, &group, &groupName]
+        {
+            if (groupName.isNotEmpty())
+                menu.addSubMenu (groupName, group);
+
+            group = juce::PopupMenu();
+        };
+
+        // Grouped by the permanent string ID prefix - "filter_cutoff" lands
+        // under FILTER - so the grouping survives any reordering of the table.
+        for (const auto& d : ParameterRegistry::allDefinitions())
+        {
+            if (d.kind != ParamKind::floatValue)
+                continue;
+
+            const auto prefix = juce::String (d.id).upToFirstOccurrenceOf ("_", false, false)
+                                                   .toUpperCase();
+
+            if (prefix != groupName)
+            {
+                flush();
+                groupName = prefix;
+            }
+
+            group.addItem ((int) d.pid + 2, juce::String (d.name), true, currentId == d.id);
+        }
+
+        flush();
+    }
+
+    juce::String PageSurface::parameterMenuResult (int menuItemId)
+    {
+        if (menuItemId <= 1)
+            return {};
+
+        const int index = menuItemId - 2;
+
+        if (! juce::isPositiveAndBelow (index, numParameters))
+            return {};
+
+        return ParameterRegistry::idOf ((PID) index);
+    }
+
+    juce::String PageSurface::parameterDisplayName (const juce::String& parameterId)
+    {
+        if (parameterId.isEmpty())
+            return "NO TARGET";
+
+        const auto pid = ParameterRegistry::fromString (parameterId);
+
+        return pid == PID::count ? "NO TARGET"
+                                 : juce::String (ParameterRegistry::definition (pid).name).toUpperCase();
+    }
+
+    // -----------------------------------------------------------------------
     //  Layout
     // -----------------------------------------------------------------------
     void PageSurface::knobGrid (juce::Rectangle<int> area, int columns, float knobRadius,
@@ -307,9 +372,9 @@ namespace nacar::ui
             return;
 
         const int rows  = (remaining + columns - 1) / columns;
-        const int box   = juce::roundToInt (knobRadius * 2.0f + page::knobBoxPad);
         const int cellW = area.getWidth() / columns;
-        const int cellH = juce::jmax (box, area.getHeight() / juce::jmax (1, rows));
+        const int cellH = juce::jmax (knobBoxHeight (knobRadius),
+                                      area.getHeight() / juce::jmax (1, rows));
 
         for (int i = 0; i < remaining; ++i)
         {
@@ -330,11 +395,28 @@ namespace nacar::ui
         gridCursor += remaining;
     }
 
+    int PageSurface::knobBoxWidth (float knobRadius) noexcept
+    {
+        // NacarKnob::capRadius() is min(w, h) / 2 minus its seat allowance, so
+        // the width is what sets the cap size - and it has to be the smaller of
+        // the two dimensions for that to hold.
+        return juce::roundToInt (knobRadius * 2.0f + knobSeatAllowance * 2.0f);
+    }
+
+    int PageSurface::knobBoxHeight (float knobRadius) noexcept
+    {
+        // The cap hangs from the top of the component and the knob paints its
+        // own label underneath, so the box has to be taller than it is wide or
+        // the label lands outside the bounds and is clipped away - which is how
+        // a page of knobs ends up with no labels at all.
+        return knobBoxWidth (knobRadius) + juce::roundToInt (page::knobBoxPad);
+    }
+
     void PageSurface::placeKnob (NacarKnob& k, juce::Rectangle<int> cell, float knobRadius)
     {
-        const int box = juce::roundToInt (knobRadius * 2.0f + page::knobBoxPad);
+        const juce::Rectangle<int> box (knobBoxWidth (knobRadius), knobBoxHeight (knobRadius));
 
-        k.setBounds (juce::Rectangle<int> (box, box).withCentre (cell.getCentre()));
+        k.setBounds (box.withCentre (cell.getCentre()));
 
         // Small caps need a shorter throw or they feel glued down.
         k.setDragSensitivity (juce::jmax (170.0f, knobRadius * 9.0f));

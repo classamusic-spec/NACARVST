@@ -1,5 +1,6 @@
 #include "SynthVisualizer.h"
 
+#include <array>
 #include <cmath>
 
 namespace nacar::ui
@@ -29,19 +30,32 @@ namespace nacar::ui
 
     void SynthVisualizer::timerCallback()
     {
-        // The only audio the editor can legally see.  getMeterLevel() is a
-        // decayed per-channel peak of the last processed block, published
-        // through a relaxed atomic, so reading it here is lock-free and cannot
-        // stall the audio thread.
-        const float l = juce::jlimit (0.0f, 1.0f, processor.getMeterLevel (0));
-        const float r = juce::jlimit (0.0f, 1.0f, processor.getMeterLevel (1));
+        // Drain the processor's scope ring.  The audio thread writes
+        // peak-decimated stereo frames into it and publishes one index with a
+        // release store; this is the matching acquire load, so the read is
+        // lock-free and cannot stall the audio thread.  A torn read costs one
+        // frame of a 30 Hz animation, which is why it needs no lock.
+        std::array<float, (size_t) NacarProcessor::scopeSize * 2> frames {};
+        const int count = processor.readScope (frames.data(), NacarProcessor::scopeSize);
 
-        left [(size_t) writeIndex] = l;
-        right[(size_t) writeIndex] = r;
+        float blockPeak = 0.0f;
 
-        writeIndex = (writeIndex + 1) % historySize;
+        for (int i = 0; i < count && i < historySize; ++i)
+        {
+            const float l = juce::jlimit (0.0f, 1.0f, frames[(size_t) (i * 2)]);
+            const float r = juce::jlimit (0.0f, 1.0f, frames[(size_t) (i * 2 + 1)]);
 
-        peakSeen = juce::jmax (peakSeen * 0.999f, l, r);
+            left [(size_t) i] = l;
+            right[(size_t) i] = r;
+
+            blockPeak = juce::jmax (blockPeak, l, r);
+        }
+
+        // The ring is copied whole rather than advanced one frame at a time, so
+        // the read cursor is always the start of the window.
+        writeIndex = 0;
+
+        peakSeen = juce::jmax (peakSeen * 0.94f, blockPeak);
 
         if (onFrame != nullptr)
             onFrame();
@@ -49,7 +63,7 @@ namespace nacar::ui
 
     float SynthVisualizer::getCurrentLevel() const noexcept
     {
-        const int newest = (writeIndex + historySize - 1) % historySize;
+        const int newest = historySize - 1;
         return juce::jmax (left[(size_t) newest], right[(size_t) newest]);
     }
 

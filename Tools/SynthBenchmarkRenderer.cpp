@@ -87,6 +87,7 @@ struct Measurements
     float monoRetainDb  = 0.0f;   // energy kept when summed to mono
     float lowCorrelation = 1.0f;  // L/R correlation below 150 Hz
     float aliasingDb    = -144.0f;// inharmonic energy relative to harmonic
+    bool  aliasingValid = false;  // false when the figure would be meaningless
     bool  allFinite     = true;
 };
 
@@ -151,8 +152,13 @@ static std::vector<float> averageSpectrum (const juce::AudioBuffer<float>& b,
 {
     const int fftSize = 1 << fftOrder;
     juce::dsp::FFT fft (fftOrder);
+    // Blackman-Harris, not Hann.  Hann's first sidelobe is -31 dB, so spectral
+    // leakage from the harmonics themselves lands in the bins between them and
+    // the aliasing figure can never read better than about -33 dB however clean
+    // the oscillator is.  Blackman-Harris sidelobes are below -90 dB, which puts
+    // the measurement floor well under anything the engine produces.
     juce::dsp::WindowingFunction<float> window ((size_t) fftSize,
-                                                juce::dsp::WindowingFunction<float>::hann);
+                                                juce::dsp::WindowingFunction<float>::blackmanHarris);
 
     std::vector<float> accum ((size_t) fftSize / 2, 0.0f);
     std::vector<float> scratch ((size_t) fftSize * 2, 0.0f);
@@ -198,7 +204,12 @@ static float aliasingFigure (const std::vector<float>& spectrum,
         return -144.0f;
 
     const double binHz = sampleRate / (double) (spectrum.size() * 2);
-    const double tolerance = juce::jmax (binHz * 2.0, fundamentalHz * 0.03);
+
+    // The tolerance has to be at least as wide as the analysis window's main
+    // lobe, or a harmonic's own leakage is counted as aliasing.  Four-term
+    // Blackman-Harris has an eight-bin main lobe, so four bins either side plus
+    // a margin is the floor; above about 1 kHz the 3 % term takes over.
+    const double tolerance = juce::jmax (binHz * 5.0, fundamentalHz * 0.03);
 
     double harmonic = 0.0, inharmonic = 0.0;
 
@@ -225,7 +236,7 @@ static float aliasingFigure (const std::vector<float>& spectrum,
 }
 
 static Measurements measure (const juce::AudioBuffer<float>& b, double sampleRate,
-                             double fundamentalHz)
+                             double fundamentalHz, bool wantAliasing)
 {
     Measurements m;
 
@@ -264,8 +275,29 @@ static Measurements measure (const juce::AudioBuffer<float>& b, double sampleRat
     m.monoRetainDb   = monoRetentionDb (b);
     m.lowCorrelation = lowBandCorrelation (b, sampleRate);
 
+    // Spectrum is taken from the sustained middle of the note only.  The
+    // attack and the release are broadband by nature, and averaging them in
+    // would put energy in every bin and make a clean oscillator look as though
+    // it were aliasing.  Peak, RMS, DC and the mono figures above use the whole
+    // render, because those are about the note as a whole.
     const int fftOrder = 12;
-    const auto spectrum = averageSpectrum (b, fftOrder, 1 << (fftOrder - 1));
+    const int sustainStart = b.getNumSamples() * 20 / 100;
+    const int sustainEnd   = b.getNumSamples() * 60 / 100;
+
+    juce::AudioBuffer<float> sustained;
+    const juce::AudioBuffer<float>* spectrumSource = &b;
+
+    if (sustainEnd - sustainStart > (1 << fftOrder))
+    {
+        sustained.setSize (b.getNumChannels(), sustainEnd - sustainStart);
+
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            sustained.copyFrom (ch, 0, b, ch, sustainStart, sustainEnd - sustainStart);
+
+        spectrumSource = &sustained;
+    }
+
+    const auto spectrum = averageSpectrum (*spectrumSource, fftOrder, 1 << (fftOrder - 1));
 
     if (! spectrum.empty())
     {
@@ -306,7 +338,11 @@ static Measurements measure (const juce::AudioBuffer<float>& b, double sampleRat
             }
         }
 
-        m.aliasingDb = aliasingFigure (spectrum, sampleRate, fundamentalHz);
+        if (wantAliasing)
+        {
+            m.aliasingDb = aliasingFigure (spectrum, sampleRate, fundamentalHz);
+            m.aliasingValid = true;
+        }
     }
 
     return m;
@@ -328,6 +364,17 @@ struct Benchmark
     float velocity;
     double seconds;
     std::function<void (BenchHost&)> setup;
+
+    /** Whether the inharmonic-energy figure means anything for this patch.
+
+        It only does for a single note played by a single, undetuned,
+        unmodulated oscillator.  Detuned unison voices are deliberately not at
+        harmonics of the nominal fundamental; so are FM sidebands, a hard-synced
+        spectrum, and every note of a chord except the root.  Reporting the
+        figure for those patches would be measuring the patch, not the
+        oscillator, and a large number would look like a defect when it is the
+        sound working as designed. */
+    bool measureAliasing = false;
 };
 
 static void initPatch (BenchHost& h)
@@ -644,11 +691,102 @@ static std::vector<Benchmark> makeBenchmarks()
         h.set (PID::ampRelease, 6.0f);
     }});
 
-    // -- The aliasing torture test ----------------------------------------
-    b.push_back ({ "alias_torture_high", "PROBE", 100, 1, 1.0f, 2.0, [] (BenchHost& h)
+    // -- Oscillator anti-aliasing, isolated --------------------------------
+    //
+    //  One saw, one sub-voice, no detune, no modulation, filter wide open, at
+    //  the top of the keyboard.  Everything that could put energy off the
+    //  harmonic series for a legitimate reason is switched off, so whatever is
+    //  left between the harmonics is aliasing and nothing else.
+    auto pureOscillator = [] (BenchHost& h, float wave)
     {
-        // Spec section 11: high notes, PWM, sync, FM, unison, high drive.
-        // A naive oscillator fails this loudly.
+        h.set (PID::oscAWave, wave);
+        h.set (PID::oscALevel, 0.9f);
+        h.set (PID::oscBLevel, 0.0f);
+        h.set (PID::oscCLevel, 0.0f);
+        h.set (PID::subLevel, 0.0f);
+        h.set (PID::noiseLevel, 0.0f);
+        h.set (PID::oscAUnison, 1.0f);
+        h.set (PID::oscADetune, 0.0f);
+        h.set (PID::oscSync, 0.0f);
+        h.set (PID::oscFmAmount, 0.0f);
+        h.set (PID::oscPmAmount, 0.0f);
+        h.set (PID::oscRingMod, 0.0f);
+        h.set (PID::bodyAmount, 0.0f);
+        h.set (PID::densityAmount, 0.0f);
+        h.set (PID::preFilterDrive, 0.0f);
+        h.set (PID::postSaturation, 0.0f);
+        h.set (PID::voiceVariation, 0.0f);
+        h.set (PID::driftAmount, 0.0f);
+        h.set (PID::filterCutoff, 20000.0f);
+        h.set (PID::filterResonance, 0.0f);
+        h.set (PID::filterKeyTrack, 0.0f);
+        h.set (PID::filterEnvAmount, 0.0f);
+        h.set (PID::filterVelAmount, 0.0f);
+        h.set (PID::ampAttack, 0.005f);
+        h.set (PID::ampSustain, 1.0f);
+    };
+
+    b.push_back ({ "alias_saw_c7", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h) { pureOscillator (h, 2.0f); }, true });
+
+    b.push_back ({ "alias_pulse_c7", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 3.0f);
+                       h.set (PID::oscAPulseWidth, 0.25f);
+                   }, true });
+
+    b.push_back ({ "alias_wavetable_c7", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 4.0f);
+                       h.set (PID::oscAWtTable, 3.0f);      // METALLIC: the hardest one
+                       h.set (PID::oscAWtPos, 0.8f);
+                   }, true });
+
+    // -- Which stage is actually aliasing ----------------------------------
+    //
+    //  The same pure saw, with one nonlinear stage switched on at a time.  The
+    //  difference between these and alias_saw_c7 is that stage's contribution,
+    //  which is the only way to know where oversampling would pay for itself.
+    b.push_back ({ "alias_saw_body", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 2.0f);
+                       h.set (PID::bodyAmount, 0.5f);
+                   }, true });
+
+    b.push_back ({ "alias_saw_drive", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 2.0f);
+                       h.set (PID::preFilterDrive, 0.5f);
+                   }, true });
+
+    b.push_back ({ "alias_saw_sat", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 2.0f);
+                       h.set (PID::postSaturation, 0.5f);
+                   }, true });
+
+    b.push_back ({ "alias_saw_filterdrive", "PROBE", 96, 1, 1.0f, 2.0,
+                   [pureOscillator] (BenchHost& h)
+                   {
+                       pureOscillator (h, 2.0f);
+                       h.set (PID::filterModel, 0.0f);      // MASS ladder
+                       h.set (PID::filterDrive, 0.6f);
+                       h.set (PID::filterResonance, 0.3f);
+                   }, true });
+
+    // -- Stability under everything at once --------------------------------
+    //
+    //  Spec section 11 asks for high notes under PWM, sync, FM, unison and
+    //  drive together.  This patch is that test - but it is a stability and
+    //  headroom probe, not an aliasing one, because sync and FM put energy off
+    //  the harmonic series by design.
+    b.push_back ({ "stress_everything", "PROBE", 100, 1, 1.0f, 2.0, [] (BenchHost& h)
+    {
         h.set (PID::oscAWave, 2.0f);
         h.set (PID::oscBWave, 3.0f); h.set (PID::oscBLevel, 0.8f);
         h.set (PID::oscBPulseWidth, 0.2f);
@@ -660,7 +798,11 @@ static std::vector<Benchmark> makeBenchmarks()
         h.set (PID::filterCutoff, 20000.0f);
     }});
 
-    b.push_back ({ "init", "PROBE", 57, 1, 0.8f, 2.0, [] (BenchHost&) {} });
+    // The INIT patch is the "does it sound premium" gate from specification
+    // section 60, not an aliasing probe: voice variation and drift are both on
+    // by default and both move the harmonics on purpose, so an inharmonic
+    // energy figure would be measuring the patch rather than the oscillator.
+    b.push_back ({ "init", "PROBE", 57, 1, 0.8f, 2.0, [] (BenchHost&) {}, false });
 
     return b;
 }
@@ -757,6 +899,91 @@ static void writeWav (const juce::File& file, const juce::AudioBuffer<float>& bu
 }
 
 // ===========================================================================
+//  CPU
+//
+//  Specification section 162 asks for CPU measurements alongside the benchmark
+//  renders.  This is a realtime factor, not a percentage: 40x means the engine
+//  renders forty seconds of audio per second of wall clock, so one instance
+//  costs about 1/40th of the core it ran on.
+// ===========================================================================
+static void measureCpu (double sampleRate, int blockSize)
+{
+    struct Case { const char* name; int voices; int unison; int character; };
+
+    const std::array<Case, 6> cases {{
+        { "1 voice, no unison",      1, 1, 1 },
+        { "1 voice, 8x unison",      1, 8, 1 },
+        { "8 voices, no unison",     8, 1, 1 },
+        { "8 voices, 4x unison",     8, 4, 1 },
+        { "16 voices, 4x unison",   16, 4, 1 },
+        { "32 voices, 8x unison",   32, 8, 0 }
+    }};
+
+    std::cout << "\nCPU\n"
+              << "  " << sampleRate << " Hz, block " << blockSize << "\n\n"
+              << std::left << std::setw (26) << "  CASE"
+              << std::right << std::setw (12) << "REALTIME"
+              << std::setw (12) << "ONE CORE" << "\n"
+              << std::string (62, '-') << "\n";
+
+    for (const auto& c : cases)
+    {
+        BenchHost host;
+        initPatch (host);
+        host.set (PID::synthCharacter, (float) c.character);
+        host.set (PID::polyphony, (float) c.voices);
+        host.set (PID::oscAUnison, (float) c.unison);
+        host.set (PID::oscBUnison, (float) c.unison);
+        host.set (PID::oscBLevel, 0.6f);
+        host.set (PID::oscCLevel, 0.3f);
+        host.set (PID::subLevel, 0.4f);
+        host.set (PID::noiseLevel, 0.1f);
+        host.set (PID::ampSustain, 1.0f);
+        host.set (PID::ampRelease, 8.0f);
+
+        SynthEngine synth;
+        synth.prepare (sampleRate, blockSize, 2);
+
+        juce::AudioBuffer<float> block (2, blockSize);
+
+        // Fill every voice, then render three seconds of all of them sounding.
+        {
+            juce::MidiBuffer midi;
+
+            for (int v = 0; v < c.voices; ++v)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 36 + v, 0.9f), 0);
+
+            block.clear();
+            synth.process (block, midi, host.registry, 120.0);
+        }
+
+        const int blocks = (int) (sampleRate * 3.0 / blockSize);
+        const double start = juce::Time::getMillisecondCounterHiRes();
+
+        for (int b = 0; b < blocks; ++b)
+        {
+            block.clear();
+            juce::MidiBuffer midi;
+            synth.process (block, midi, host.registry, 120.0);
+        }
+
+        const double elapsed = (juce::Time::getMillisecondCounterHiRes() - start) * 0.001;
+        const double audio   = (double) (blocks * blockSize) / sampleRate;
+        const double factor  = elapsed > 0.0 ? audio / elapsed : 0.0;
+
+        std::cout << std::left << "  " << std::setw (24) << c.name
+                  << std::right << std::fixed << std::setprecision (1)
+                  << std::setw (11) << factor << "x"
+                  << std::setw (11) << (factor > 0.0 ? 100.0 / factor : 0.0) << "%"
+                  << "\n";
+    }
+
+    std::cout << "\n  Measured on whatever core this ran on, single threaded,\n"
+                 "  with every voice sounding at once - which is the worst case,\n"
+                 "  not a typical one.\n";
+}
+
+// ===========================================================================
 int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -764,6 +991,7 @@ int main (int argc, char* argv[])
     juce::File outDir = juce::File::getCurrentWorkingDirectory().getChildFile ("Renders");
     double sampleRate = 48000.0;
     bool writeFiles = true;
+    bool cpuOnly = false;
     juce::String filter;
 
     for (int i = 1; i < argc; ++i)
@@ -773,7 +1001,14 @@ int main (int argc, char* argv[])
         if (arg == "--out" && i + 1 < argc)        outDir = juce::File (juce::String (argv[++i]));
         else if (arg == "--rate" && i + 1 < argc)  sampleRate = juce::String (argv[++i]).getDoubleValue();
         else if (arg == "--no-wav")                writeFiles = false;
+        else if (arg == "--cpu")                   cpuOnly = true;
         else if (! arg.startsWith ("--"))          filter = arg;
+    }
+
+    if (cpuOnly)
+    {
+        measureCpu (sampleRate, 256);
+        return 0;
     }
 
     if (writeFiles)
@@ -812,7 +1047,7 @@ int main (int argc, char* argv[])
 
         const auto audio = renderBenchmark (bench, sampleRate, 256);
         const double fundamental = juce::MidiMessage::getMidiNoteInHertz (bench.midiNote);
-        const auto m = measure (audio, sampleRate, fundamental);
+        const auto m = measure (audio, sampleRate, fundamental, bench.measureAliasing);
 
         if (writeFiles)
             writeWav (outDir.getChildFile (juce::String (bench.name) + ".wav"), audio, sampleRate);
@@ -832,7 +1067,8 @@ int main (int argc, char* argv[])
                   << std::setprecision (2)
                   << std::setw (8)  << m.lowCorrelation
                   << std::setprecision (1)
-                  << std::setw (9)  << m.aliasingDb
+                  << std::setw (9)  << (m.aliasingValid ? juce::String (m.aliasingDb, 1).toStdString()
+                                                        : std::string ("--"))
                   << std::setprecision (4)
                   << std::setw (9)  << m.dcOffset
                   << (m.allFinite ? "" : "   NON-FINITE")
@@ -846,14 +1082,16 @@ int main (int argc, char* argv[])
         if (std::abs (m.dcOffset) > 0.01f)         ++problems;
         if (m.monoRetainDb < -3.0f)                ++problems;
         if (juce::String (bench.family) == "REESE" && m.lowCorrelation < 0.9f) ++problems;
-        if (juce::String (bench.name) == "alias_torture_high" && m.aliasingDb > -30.0f) ++problems;
+        if (m.aliasingValid && m.aliasingDb > -30.0f) ++problems;
     }
 
     std::cout << "\n"
               << rendered << " benchmarks rendered, "
               << problems << " threshold violation" << (problems == 1 ? "" : "s") << "\n\n"
               << "Thresholds: peak <= 0 dBFS | |DC| <= 0.01 | mono retention >= -3 dB\n"
-              << "            Reese low-band correlation >= 0.90 | alias probe <= -30 dB\n"
+              << "            Reese low-band correlation >= 0.90 | alias probes <= -30 dB\n"
+              << "ALIAS reads -- where the figure would be meaningless: detuned unison,\n"
+              << "FM, hard sync and chords all put energy off the harmonic series by design.\n"
               << "\nThese are measurements, not a verdict. Whether NACAR sounds\n"
               << "expensive is decided by listening to the WAVs, not by this table.\n";
 

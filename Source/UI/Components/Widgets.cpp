@@ -622,9 +622,19 @@ namespace nacar::ui
         //    sizes the component tall enough to contain them.
         const float labelBaseline = centre.y + r + knobLabelGap;
 
+        // A dark cap only ever sits on glass, and ceramic ink on glass is
+        // invisible - which is how a page of dark knobs ends up unlabelled.
         if (label.isNotEmpty())
-            ceramicLabel (g, label, { (float) getWidth() * 0.5f, labelBaseline },
-                          labelSize, labelTrack, theme::ink, juce::Justification::centred);
+        {
+            const juce::Point<float> at { (float) getWidth() * 0.5f, labelBaseline };
+
+            if (style == Style::dark)
+                glassLabel (g, label, at, labelSize, labelTrack,
+                            theme::glassInkMuted, juce::Justification::centred);
+            else
+                ceramicLabel (g, label, at, labelSize, labelTrack,
+                              theme::ink, juce::Justification::centred);
+        }
 
         if (legendLeft.isNotEmpty() || legendRight.isNotEmpty())
             scaleLegend (g, legendLeft, legendRight,
@@ -760,8 +770,12 @@ namespace nacar::ui
         float w = theme::trackedWidth (getButtonText(), theme::label (textSize), tracking)
                   + horizontalPadding * 2.0f;
 
-        if (leadingIcon.has_value())  w += iconSize + pillIconGap;
-        if (trailingIcon.has_value()) w += iconSize + pillIconGap;
+        // The gap only exists between an icon and something after it, so a pill
+        // with no label reserves none - otherwise its glyph sits off centre.
+        const bool hasText = getButtonText().isNotEmpty();
+
+        if (leadingIcon.has_value())  w += iconSize + (hasText ? pillIconGap : 0.0f);
+        if (trailingIcon.has_value()) w += iconSize + (hasText ? pillIconGap : 0.0f);
 
         return w;
     }
@@ -782,9 +796,12 @@ namespace nacar::ui
         const float iconSize = b.getHeight() * iconRatio;
         const float textW    = theme::trackedWidth (getButtonText(), font, tracking);
 
+        const bool  hasText = getButtonText().isNotEmpty();
+        const float gap     = hasText ? pillIconGap : 0.0f;
+
         float content = textW;
-        if (leadingIcon.has_value())  content += iconSize + pillIconGap;
-        if (trailingIcon.has_value()) content += iconSize + pillIconGap;
+        if (leadingIcon.has_value())  content += iconSize + gap;
+        if (trailingIcon.has_value()) content += iconSize + gap;
 
         float x = b.getCentreX() - content * 0.5f;
 
@@ -792,7 +809,7 @@ namespace nacar::ui
         {
             icons::draw (g, *leadingIcon, squareAt ({ x + iconSize * 0.5f, b.getCentreY() },
                                                     iconSize * 0.5f), colour);
-            x += iconSize + pillIconGap;
+            x += iconSize + gap;
         }
 
         g.setColour (colour);
@@ -802,7 +819,7 @@ namespace nacar::ui
 
         if (trailingIcon.has_value())
         {
-            x += pillIconGap;
+            x += gap;
             icons::draw (g, *trailingIcon, squareAt ({ x + iconSize * 0.5f, b.getCentreY() },
                                                      iconSize * 0.5f), colour);
         }

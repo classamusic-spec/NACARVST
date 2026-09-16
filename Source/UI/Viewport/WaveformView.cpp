@@ -536,9 +536,14 @@ namespace nacar::ui
         g.setColour (theme::glassEdge);
         g.fillRect (area.getX() + 1.0f, area.getCentreY() - 0.5f, area.getWidth() - 2.0f, 1.0f);
 
-        // The invitation sits behind everything, as a watermark: it is true
-        // whenever no sample is loaded, including while the synth monitor runs.
-        if (kind == SourceKind::none || kind == SourceKind::synthMonitor)
+        // The invitation is a watermark for an empty field.  While the synth
+        // monitor is actually showing something it is not an empty field, so
+        // the invitation gives way to the waveform rather than sitting across
+        // it - it comes back the moment the instrument falls silent.
+        const bool monitorIdle = (kind == SourceKind::synthMonitor)
+                                 && (synthSource == nullptr || ! synthSource->hasSignal());
+
+        if (kind == SourceKind::none || monitorIdle)
             paintEmptyInvitation (g, area);
 
         if (kind == SourceKind::pendingSample)

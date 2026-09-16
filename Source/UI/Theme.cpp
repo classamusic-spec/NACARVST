@@ -148,18 +148,35 @@ namespace nacar::theme
         }
 
         // Specular top edge and bevelled bottom edge.
-        juce::Path top1, bottom1;
-        const auto r = bounds.reduced (0.5f);
-        top1.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), corner, corner,
-                                  true, true, false, false);
-        bottom1.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), corner, corner,
-                                     false, false, true, true);
+        //
+        // Both are strokes of the same rounded rectangle, each clipped to the
+        // half it belongs to.  Path::addRoundedRectangle's per-corner flags
+        // only choose which corners are curved - the path is still closed - so
+        // stroking one of those directly would draw a square-cornered outline
+        // all the way round, which is invisible on ceramic and glaringly
+        // obvious on glass.
+        {
+            juce::Path outline;
+            outline.addRoundedRectangle (bounds.reduced (0.5f), corner);
 
-        g.setColour (juce::Colours::white.withAlpha (0.60f));
-        g.strokePath (top1, juce::PathStrokeType (1.0f));
+            const juce::PathStrokeType stroke (1.0f);
 
-        g.setColour (juce::Colours::black.withAlpha (0.22f));
-        g.strokePath (bottom1, juce::PathStrokeType (1.0f));
+            {
+                juce::Graphics::ScopedSaveState ss (g);
+                g.reduceClipRegion (bounds.withHeight (bounds.getHeight() * 0.55f)
+                                          .getSmallestIntegerContainer());
+                g.setColour (juce::Colours::white.withAlpha (0.60f));
+                g.strokePath (outline, stroke);
+            }
+
+            {
+                juce::Graphics::ScopedSaveState ss (g);
+                g.reduceClipRegion (bounds.withTop (bounds.getCentreY())
+                                          .getSmallestIntegerContainer());
+                g.setColour (juce::Colours::black.withAlpha (0.22f));
+                g.strokePath (outline, stroke);
+            }
+        }
     }
 
     void glassSurface (juce::Graphics& g, juce::Rectangle<float> bounds, float corner,

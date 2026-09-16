@@ -9,9 +9,10 @@
     and they recolour with state.  Each path is authored inside a 100 x 100 box
     centred on (50, 50) and is scaled to fit wherever it is drawn.
 
-    Stroked icons are returned unclosed and are meant to be drawn with
-    drawStroked(); filled icons are closed shapes for drawFilled().  draw()
-    picks the right one.
+    Some glyphs read better as a solid shape and some as an outline; isFilled()
+    says which, and draw() dispatches on it.  An outlined glyph may still be a
+    closed path - a gear and a cube are closed outlines - so the distinction is
+    about how a glyph is rendered, not about how its path is built.
 */
 namespace nacar::icons
 {

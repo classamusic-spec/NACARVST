@@ -23,28 +23,21 @@ namespace nacar::ui
         ---------------------------------------------------------------------
         WHAT THIS IS, HONESTLY
         ---------------------------------------------------------------------
-        This is *not* a sample-accurate oscilloscope.  NacarProcessor exposes
-        exactly one window onto the audio it produces:
+        It is a real waveform, and it is decimated.
 
-            float getMeterLevel (int channel) const noexcept;
+        NacarProcessor keeps a lock-free ring of the instrument's output.  The
+        audio thread writes one frame per `getScopeDecimation()` samples, and
+        each frame is the *peak* of the samples it covers rather than one of
+        them - a scope that decimated by dropping samples would miss exactly
+        the transients a producer looks at.  The editor copies the whole ring
+        on its timer through an acquire load.
 
-        which is the decayed peak of the last processed block, per channel.
-        SynthEngine::getActiveVoiceCount() and getLastPeak() exist, but the
-        `SynthEngine synth` member of NacarProcessor is private and there is no
-        accessor for it, so from the UI they are unreachable.  PluginProcessor.h
-        is frozen, so nothing is added to it here.
-
-        A true scope would need a lock-free FIFO in the processor - a
-        single-producer / single-consumer ring the audio thread writes samples
-        into and the editor drains on its timer.  The frozen header exposes no
-        such FIFO in this phase.  When one lands (alongside the sample engine in
-        Phases 18-19) this class is the only thing that has to change: the ring
-        below simply gets filled from the FIFO instead of from the meter, and
-        every consumer of fillEnvelope() keeps working unchanged.
-
-        Until then: a 30 Hz poll of the two meter channels, kept in a fixed-size
-        ring.  Genuinely the instrument's output level over time - accurate,
-        just coarse.  Roughly 34 seconds of history at the default ring size.
+        So the shape below is genuinely the instrument's output over the last
+        three quarters of a second, at the resolution the ring holds.  What it
+        is not is a per-sample oscilloscope: at 48 kHz each frame covers about
+        eighteen samples, so a single cycle of a high note is one frame wide.
+        Reading individual cycles would need the ring to carry raw samples and
+        the field to zoom into it, which is a different feature.
 
         The envelope is handed to WaveformView, which renders it in exactly the
         same violet visual language as an audio waveform (mirrored fill, crest
@@ -61,10 +54,12 @@ namespace nacar::ui
         /** Poll rate.  Matches the editor's own repaint timer. */
         static constexpr int refreshHz = 30;
 
-        /** Ring length in frames.  1024 / 30 Hz is about 34 seconds of history,
-            and comfortably exceeds the 840 px width of layout::vp::waveField so
-            the main field never has to invent columns it has no data for. */
-        static constexpr int historySize = 1024;
+        /** Ring length in frames.  Mirrors the processor's scope exactly, so a
+            frame here is a frame there and no resampling happens on the way in.
+            It also comfortably exceeds the 840 px width of
+            layout::vp::waveField, so the field never has to invent columns it
+            has no data for. */
+        static constexpr int historySize = NacarProcessor::scopeSize;
 
         void start();
         void stop();

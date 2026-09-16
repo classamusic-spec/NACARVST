@@ -304,7 +304,8 @@ namespace nacar::ui
                     continue;
 
                 const auto source = slot.tree.getProperty (ids::modSource).toString();
-                const auto target = targetNameFor (slot.tree.getProperty (ids::modTarget).toString());
+                const auto target = PageSurface::parameterDisplayName (
+                                        slot.tree.getProperty (ids::modTarget).toString());
                 const bool on     = (bool) slot.tree.getProperty (ids::modEnabled);
 
                 if (force || slot.source->getButtonText() != source)
@@ -461,17 +462,6 @@ namespace nacar::ui
             return names;
         }
 
-        static juce::String targetNameFor (const juce::String& parameterId)
-        {
-            if (parameterId.isEmpty())
-                return "NO TARGET";
-
-            const auto pid = ParameterRegistry::fromString (parameterId);
-
-            return pid == PID::count ? "NO TARGET"
-                                     : juce::String (ParameterRegistry::definition (pid).name).toUpperCase();
-        }
-
         void fetchTree()
         {
             matrixTree = processor.getStateManager().group (ids::MODMATRIX);
@@ -549,45 +539,10 @@ namespace nacar::ui
             if (! slot.tree.isValid())
                 return;
 
-            const auto currentId = slot.tree.getProperty (ids::modTarget).toString();
-
-            // The target list is the parameter table itself, grouped by the
-            // permanent string ID prefix, so it can never drift from the list
-            // of parameters that actually exist.
+            // The target list is the parameter table itself - see
+            // PageSurface::buildParameterMenu.  The SEQ lanes use the same one.
             juce::PopupMenu menu;
-            menu.addItem (1, "NO TARGET", true, currentId.isEmpty());
-            menu.addSeparator();
-
-            juce::PopupMenu group;
-            juce::String groupName;
-
-            auto flush = [&menu, &group, &groupName]
-            {
-                if (groupName.isNotEmpty())
-                    menu.addSubMenu (groupName, group);
-
-                group = juce::PopupMenu();
-            };
-
-            for (const auto& d : ParameterRegistry::allDefinitions())
-            {
-                if (d.kind != ParamKind::floatValue)
-                    continue;
-
-                const auto prefix = juce::String (d.id).upToFirstOccurrenceOf ("_", false, false)
-                                                       .toUpperCase();
-
-                if (prefix != groupName)
-                {
-                    flush();
-                    groupName = prefix;
-                }
-
-                group.addItem ((int) d.pid + 2, juce::String (d.name),
-                               true, currentId == d.id);
-            }
-
-            flush();
+            PageSurface::buildParameterMenu (menu, slot.tree.getProperty (ids::modTarget).toString());
 
             menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (slot.target),
                                 [this, index] (int result)
@@ -600,13 +555,8 @@ namespace nacar::ui
                                     if (! s.tree.isValid())
                                         return;
 
-                                    if (result == 1)
-                                        s.tree.setProperty (ids::modTarget, "", nullptr);
-                                    else
-                                        s.tree.setProperty (ids::modTarget,
-                                                            ParameterRegistry::idOf ((PID) (result - 2)),
-                                                            nullptr);
-
+                                    s.tree.setProperty (ids::modTarget,
+                                                        PageSurface::parameterMenuResult (result), nullptr);
                                     refreshFromState();
                                 });
         }
@@ -925,7 +875,7 @@ namespace nacar::ui
         // the point of Pulse is not that it ducks, it is what it ducks.
         text (g, "A KICK MAKES IT QUIETER, DARKER, NARROWER, DRIER",
               { (float) pulseDestCaption.getRight(), (float) pulseDestCaption.getBottom() },
-              page::noteSize, 0.10f, inkFaint,
+              page::noteSize, 0.10f, inkFaint(),
               juce::Justification::right, (float) pulseDestCaption.getWidth());
 
         theme::hairline (g, { (float) pulseDestRule.getX(), (float) pulseDestRule.getY() },

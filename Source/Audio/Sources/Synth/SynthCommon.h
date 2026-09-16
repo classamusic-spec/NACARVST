@@ -26,11 +26,19 @@ namespace nacar::synth
     inline constexpr float kPi    = 3.14159265358979323846f;
     inline constexpr float kTwoPi = 6.28318530717958647692f;
 
-    /** Global voice trim.  Chosen so that one INIT voice (saw + a little B +
-        sub, LP at 8 kHz, full velocity) peaks around -13 dBFS, which leaves a
-        four-note chord near -6 dBFS and a ten-note chord just under 0 dBFS
-        before the bus soft-clip does anything at all. */
-    inline constexpr float kVoiceGain = 0.24f;
+    /** Global voice trim.
+
+        Chosen so that one INIT voice (saw + a little B, LP at 9 kHz, full
+        velocity) peaks around -13 dBFS, which leaves a four-note chord near
+        -6 dBFS and a ten-note chord just under 0 dBFS before the bus limiter
+        does anything at all.
+
+        The value is not a guess: NacarBench renders the INIT patch and prints
+        its peak, and this constant is what makes that number land on -13.  If
+        the voice path ever changes its gain structure, re-run the benchmark and
+        move this rather than compensating somewhere downstream - the whole
+        point of a single trim is that there is exactly one place to look. */
+    inline constexpr float kVoiceGain = 0.52f;
 
     // -----------------------------------------------------------------------
     //  Numeric hygiene

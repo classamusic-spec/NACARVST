@@ -35,6 +35,14 @@ namespace nacar
 
         for (auto& m : meter)
             m.store (0.0f, std::memory_order_relaxed);
+
+        // Keep the scope's time window roughly constant across sample rates:
+        // 2048 frames should span about three quarters of a second.
+        scopeDecimation = juce::jmax (1, (int) std::round (sampleRate * 0.75 / (double) scopeSize));
+        scopeCounter = 0;
+        scopePeakL = scopePeakR = 0.0f;
+        scope.fill (0.0f);
+        scopeWrite.store (0, std::memory_order_relaxed);
     }
 
     void NacarProcessor::releaseResources()
@@ -115,6 +123,68 @@ namespace nacar
         }
 
         updateMeters (buffer);
+        pushScope (buffer);
+    }
+
+    void NacarProcessor::pushScope (const juce::AudioBuffer<float>& buffer) noexcept
+    {
+        const int numSamples = buffer.getNumSamples();
+        const int numCh = buffer.getNumChannels();
+
+        if (numSamples <= 0 || numCh <= 0)
+            return;
+
+        const auto* l = buffer.getReadPointer (0);
+        const auto* r = buffer.getReadPointer (numCh > 1 ? 1 : 0);
+
+        int w = scopeWrite.load (std::memory_order_relaxed);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            // Peak rather than decimate-by-dropping: a scope that skips samples
+            // misses transients, which is exactly what a producer looks at.
+            scopePeakL = juce::jmax (scopePeakL, std::abs (l[i]));
+            scopePeakR = juce::jmax (scopePeakR, std::abs (r[i]));
+
+            if (++scopeCounter >= scopeDecimation)
+            {
+                scopeCounter = 0;
+
+                scope[(size_t) (w * 2)]     = scopePeakL;
+                scope[(size_t) (w * 2 + 1)] = scopePeakR;
+
+                scopePeakL = scopePeakR = 0.0f;
+                w = (w + 1) % scopeSize;
+            }
+        }
+
+        scopeWrite.store (w, std::memory_order_release);
+    }
+
+    int NacarProcessor::readScope (float* dest, int maxFrames) const noexcept
+    {
+        if (dest == nullptr || maxFrames <= 0)
+            return 0;
+
+        const int count = juce::jmin (maxFrames, scopeSize);
+        const int w = scopeWrite.load (std::memory_order_acquire);
+
+        // Walk backwards from the write head so the newest frame lands last.
+        int read = (w - count + scopeSize) % scopeSize;
+
+        for (int i = 0; i < count; ++i)
+        {
+            dest[i * 2]     = scope[(size_t) (read * 2)];
+            dest[i * 2 + 1] = scope[(size_t) (read * 2 + 1)];
+            read = (read + 1) % scopeSize;
+        }
+
+        return count;
+    }
+
+    int NacarProcessor::getActiveVoiceCount() const noexcept
+    {
+        return synth.getActiveVoiceCount();
     }
 
     void NacarProcessor::updateMeters (const juce::AudioBuffer<float>& buffer)

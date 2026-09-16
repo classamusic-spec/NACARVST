@@ -17,6 +17,7 @@
 #include "../Source/Plugin/ParameterRegistry.h"
 #include "../Source/Plugin/StateManager.h"
 #include "../Source/Audio/Sources/Synth/SynthEngine.h"
+#include "../Source/Audio/Sources/Synth/Halfband.h"
 
 using namespace nacar;
 
@@ -670,6 +671,132 @@ struct SynthEngineTests : juce::UnitTest
 };
 
 // ===========================================================================
+//  Halfband
+//
+//  The voice's nonlinear core runs at twice the sample rate, so the whole of
+//  it depends on this filter pair being right.  A polyphase decomposition that
+//  is subtly wrong - the two phases swapped, the delay off by one - still
+//  produces plausible-looking audio, so it is tested directly rather than
+//  inferred from the synth sounding reasonable.
+// ===========================================================================
+struct HalfbandTests : juce::UnitTest
+{
+    HalfbandTests() : juce::UnitTest ("Halfband", "nacar") {}
+
+    void runTest() override
+    {
+        using namespace nacar::synth;
+
+        beginTest ("the taps are a halfband: unity at DC, one half at the centre");
+        {
+            const auto& even = HalfbandDesign<kHalfbandTaps>::evenTaps();
+
+            double sum = 0.0;
+            for (auto t : even)
+                sum += (double) t;
+
+            // The even taps plus the single centre tap of 0.5 must sum to 1.
+            expectWithinAbsoluteError ((float) (sum + 0.5), 1.0f, 1.0e-4f);
+        }
+
+        beginTest ("up then down reconstructs the signal");
+        {
+            // A sine well inside the passband must survive a round trip with
+            // nothing but a delay.  Anything else - a swapped phase, a
+            // misaligned tap - shows up here as a large residual.
+            constexpr int n = 4096;
+            std::vector<float> in ((size_t) n), out ((size_t) n);
+
+            for (int i = 0; i < n; ++i)
+                in[(size_t) i] = std::sin (juce::MathConstants<float>::twoPi
+                                               * 1000.0f * (float) i / 48000.0f);
+
+            VoiceUpsampler up;
+            VoiceDownsampler down;
+            up.reset();
+            down.reset();
+
+            for (int i = 0; i < n; ++i)
+            {
+                float a = 0.0f, b = 0.0f;
+                up.process (in[(size_t) i], a, b);
+                out[(size_t) i] = down.process (a, b);
+            }
+
+            // Find the delay that best aligns the two, then measure what is
+            // left over.  The delay is a property of the filter length; the
+            // residual is what says whether the decomposition is correct.
+            int   bestDelay = 0;
+            double bestError = 1.0e30;
+
+            for (int d = 0; d < kHalfbandTaps; ++d)
+            {
+                double err = 0.0;
+
+                for (int i = n / 4; i < n - kHalfbandTaps; ++i)
+                {
+                    const double e = (double) out[(size_t) (i + d)] - (double) in[(size_t) i];
+                    err += e * e;
+                }
+
+                if (err < bestError)
+                {
+                    bestError = err;
+                    bestDelay = d;
+                }
+            }
+
+            const int samples = n - kHalfbandTaps - n / 4;
+            const double rms = std::sqrt (bestError / (double) juce::jmax (1, samples));
+            const double db = 20.0 * std::log10 (juce::jmax (1.0e-12, rms / 0.7071));
+
+            logMessage ("    round trip: delay " + juce::String (bestDelay)
+                        + " samples, residual " + juce::String (db, 1) + " dB");
+
+            expect (db < -50.0, "round-trip residual is " + juce::String (db, 1)
+                                    + " dB, which means the polyphase split is wrong");
+        }
+
+        beginTest ("content above the original Nyquist is rejected");
+        {
+            // Feed the upsampler a signal, then inject a tone at three quarters
+            // of the high rate's Nyquist - which is above the low rate's - and
+            // check the downsampler removes it rather than folding it back.
+            constexpr int n = 4096;
+
+            VoiceDownsampler down;
+            down.reset();
+
+            double energy = 0.0;
+
+            for (int i = 0; i < n; ++i)
+            {
+                // 36 kHz at a 96 kHz high rate: above the 24 kHz the low rate
+                // can represent, so it must not survive.
+                const float a = std::sin (juce::MathConstants<float>::twoPi
+                                              * 36000.0f * (float) (i * 2) / 96000.0f);
+                const float b = std::sin (juce::MathConstants<float>::twoPi
+                                              * 36000.0f * (float) (i * 2 + 1) / 96000.0f);
+
+                const float y = down.process (a, b);
+
+                if (i > n / 4)
+                    energy += (double) y * y;
+            }
+
+            const double rms = std::sqrt (energy / (double) (n - n / 4));
+            const double db = 20.0 * std::log10 (juce::jmax (1.0e-12, rms / 0.7071));
+
+            logMessage ("    out-of-band rejection: " + juce::String (db, 1) + " dB");
+
+            expect (db < -40.0, "an out-of-band tone survived at "
+                                    + juce::String (db, 1) + " dB");
+        }
+    }
+};
+
+// ===========================================================================
+static HalfbandTests       halfbandTests;
 static ParameterTableTests parameterTableTests;
 static StateTests          stateTests;
 static SynthEngineTests    synthEngineTests;
@@ -681,10 +808,20 @@ int main (int argc, char* argv[])
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);
 
-    if (argc > 1)
-        runner.runTestsInCategory ("nacar");
-    else
+    // JUCE's own modules register several hundred unit tests of their own.
+    // They are not this project's to pass or fail - one of them writes to a
+    // temporary directory this container does not allow - so the default is
+    // NACAR's category only.  Pass --all to run everything.
+    bool runEverything = false;
+
+    for (int i = 1; i < argc; ++i)
+        if (juce::String (argv[i]) == "--all")
+            runEverything = true;
+
+    if (runEverything)
         runner.runAllTests();
+    else
+        runner.runTestsInCategory ("nacar");
 
     int failures = 0, passes = 0;
 

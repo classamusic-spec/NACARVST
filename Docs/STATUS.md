@@ -14,9 +14,9 @@ production-ready.
 |---|---|---|
 | 1 | Foundation: CMake, JUCE, processor/editor, parameters, state | **Complete** |
 | 2 | The locked interface | **Complete** |
-| 3–6 | Synth core: voices, oscillators, characters, richness | **Built, not auditioned** |
+| 3–6 | Synth core: voices, oscillators, characters, richness | **Built and measured, not auditioned** |
 | 7 | Synth performance: mono, legato, glide, expression | **Built, not auditioned** |
-| 8 | Synth quality gate: 20 golden benchmarks | **Measured, not accepted** |
+| 8 | Synth quality gate: benchmarks | **29/29 pass; not accepted by ear** |
 | 9 | Memory | Not started |
 | 10 | Modulation / Breath | Parameters and UI only |
 | 11 | Pulse | Parameters and UI only |
@@ -112,20 +112,42 @@ make it look populated.
 
 ## What has been measured, and what has not
 
-`NacarBench` renders 22 engineering benchmarks offline and measures aliasing
-under sync/FM/unison/drive, mono retention, low-band L/R correlation, spectral
-balance, crest factor and DC, against the specification's own thresholds.
-`NacarTests` renders at 44.1 / 48 / 88.2 / 96 kHz across every supported block
-size and asserts the engine stays finite and bounded, that extreme resonance and
-drive do not blow the filters up, that the sub survives a mono fold, that
-all-notes-off actually silences it, and that voice stealing does not explode.
+`NacarBench` renders 29 engineering benchmarks offline and measures aliasing,
+mono retention, low-band L/R correlation, spectral balance, crest factor, DC and
+CPU against the specification's own thresholds. **All 29 pass.** `NacarTests`
+renders at 44.1 / 48 / 88.2 / 96 kHz across every supported block size and
+asserts the engine stays finite and bounded, that extreme resonance and drive do
+not blow the filters up, that the sub survives a mono fold, that all-notes-off
+actually silences it, and that voice stealing does not explode. **All 6243
+assertions pass.**
 
-**Those are measurements, not a verdict.** The specification's synth acceptance
-standard (§163) is about how it *sounds*: whether the INIT patch feels premium,
-whether MASS bass stays huge without reverb, whether HAZE chords are rich,
-whether MIRAGE is modern without being harsh. Nobody has listened to this build.
-Until someone does, Phase 8 is **measured but not accepted**, and Phase 25
-onward should not begin.
+Headline numbers:
+
+| | |
+|---|---|
+| Aliasing, bare saw at C7 | −40.3 dB inharmonic |
+| Aliasing added by drive, Body, saturation | none measurable |
+| Mono retention, worst of 29 patches | −0.6 dB |
+| Low-band L/R correlation, every bass patch | 1.00 |
+| DC offset, worst of 29 patches | 0.0004 |
+| Peak level, INIT patch | −12.3 dBFS |
+| CPU, 16 voices × 4 unison | 52 % of one core |
+
+Three real defects were found and fixed by these measurements rather than by
+inspection: a subsonic pile-up in the phase-modulated triangle, a filter applied
+as a per-sample gain ratio taken from the mono sum, and a half-sample
+misalignment in the oversampling halfband. All three produced plausible-looking
+audio.
+
+`Source/Audio/Sources/Synth/README.md` documents the whole engine as
+specification §162 requires, including what is weak.
+
+**Those are measurements, not a verdict.** The acceptance standard (§163) is
+about how it *sounds*: whether the INIT patch feels premium, whether MASS bass
+stays huge without reverb, whether HAZE chords are rich, whether MIRAGE is
+modern without being harsh. Nobody has listened to this build. Until someone
+does, Phase 8 is **measured but not accepted**, and Phase 25 onward should not
+begin.
 
 ---
 
@@ -140,8 +162,9 @@ Stated plainly, because the specification forbids claiming otherwise:
 - **macOS and Windows have not been built.** The CMake is written for them and
   the code is platform-neutral, but only Linux has actually compiled.
 - **AU has not been built or validated.** `auval` has not run.
-- **No CPU profiling has been done.** Polyphony and unison costs are untested
-  against a real session with several instances.
+- **CPU has been measured but not profiled in a session.** `NacarBench --cpu`
+  gives per-configuration numbers on one machine; nobody has run several
+  instances in a DAW. 32 voices at 8× unison does not reach realtime there.
 - **The 20 golden benchmark patches are engineering probes, not presets.** They
   exist to exercise the engine's corners, not to be shipped.
 
@@ -165,6 +188,9 @@ Interface-level:
   uniform gap is used instead, on the grounds that the variation is more likely
   to be transcription error than design intent. Worth checking against the
   image.
+- The deep-edit pages (MOD, FX, SEQ, MIX) are new surfaces with no reference
+  image behind them. They follow the chassis and the material language, but
+  their internal layout is a design decision rather than a transcription.
 - The mod matrix and the sequencer store routings and step data that nothing
   reads yet.
 
@@ -172,6 +198,12 @@ Interface-level:
 
 ## The next thing to do
 
-Listen to `NacarBench`'s output. The specification gates everything after
-Phase 8 on the synth sounding premium with all atmospheric processing disabled,
-and that judgement cannot be made from a table of numbers.
+Listen to `NacarBench`'s output — it writes one WAV per benchmark. The
+specification gates everything after Phase 8 on the synth sounding premium with
+all atmospheric processing disabled, and that judgement cannot be made from a
+table of numbers.
+
+After that, in the specification's own order: Memory (Phase 9), then modulation
+and Pulse, then the FX chain, then the atmosphere modules. The interfaces and
+the persisted state for all of them already exist and are waiting for engines to
+read them.

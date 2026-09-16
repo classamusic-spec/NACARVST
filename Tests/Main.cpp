@@ -1417,6 +1417,92 @@ struct ChainTests : juce::UnitTest
             }
         }
 
+        beginTest ("muting a card is the same thing as switching it off");
+        {
+            // The chain has two ways to silence a module - the power ring, which
+            // writes `*_on`, and the `-` glyph on the card, which sets a bit in
+            // the FxOrder bypass mask - and a user has every right to expect
+            // them to behave identically.  They did not: the chain skipped the
+            // call for a masked slot, which starves Retro's and Crush's dry
+            // lines, starves Rewind's and Grain's histories, and denies Space
+            // the transition it flushes its tail on.  This asserts the two
+            // routes now produce the same samples.
+            auto renderWith = [this] (bool useMask)
+            {
+                TestHost host;
+
+                for (auto pid : { PID::retroOn, PID::crushOn, PID::fxFilterOn,
+                                  PID::spaceOn })
+                    host.registry.setFromUI (pid, 1.0f);
+
+                if (! useMask)
+                    host.registry.setFromUI (PID::retroOn, 0.0f);
+
+                auto order = FxOrder::defaultOrder();
+
+                if (useMask)
+                    order.bypassMask |= (1u << (juce::uint32) FxSlot::retro);
+
+                NacarEngine engine;
+                engine.prepare (48000.0, 256, 2);
+                engine.setFxOrder (order);
+
+                return renderChain (engine, host.registry, 48000.0, 256, 60);
+            };
+
+            const auto masked  = renderWith (true);
+            const auto powered = renderWith (false);
+
+            expect (masked.allFinite && powered.allFinite);
+
+            double difference = 0.0, reference = 0.0;
+
+            for (int i = 0; i < masked.audio.getNumSamples(); ++i)
+            {
+                const double d = (double) masked.audio.getSample (0, i)
+                                   - powered.audio.getSample (0, i);
+                difference += d * d;
+                reference  += (double) powered.audio.getSample (0, i)
+                                * powered.audio.getSample (0, i);
+            }
+
+            const double db = 10.0 * std::log10 (juce::jmax (1.0e-12, difference
+                                                       / juce::jmax (1.0e-12, reference)));
+
+            logMessage ("    masked card vs powered-off card: " + juce::String (db, 1) + " dB");
+
+            expect (db < -100.0,
+                    "the bypass mask and the power ring disagree by "
+                        + juce::String (db, 1) + " dB");
+        }
+
+        beginTest ("a masked card does not report latency the signal never incurs");
+        {
+            // Retro is 4 ms of onset delay when it is running.  If the chain
+            // still counted it while the card was muted, the host would
+            // compensate for a delay that is not there and the instrument would
+            // play early.
+            TestHost host;
+            host.registry.setFromUI (PID::retroOn, 1.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            engine.setFxOrder (FxOrder::defaultOrder());
+            renderChain (engine, host.registry, 48000.0, 256, 8);
+
+            const int withRetro = engine.getLatencySamples();
+            expect (withRetro > 0, "Retro reported no latency while it was running");
+
+            auto masked = FxOrder::defaultOrder();
+            masked.bypassMask |= (1u << (juce::uint32) FxSlot::retro);
+
+            engine.setFxOrder (masked);
+            renderChain (engine, host.registry, 48000.0, 256, 8);
+
+            expect (engine.getLatencySamples() < withRetro,
+                    "masking Retro did not remove its latency from the chain total");
+        }
+
         beginTest ("the chain does not decorrelate the low end");
         {
             // Specification sections 38, 40 and 43: width is never bought at

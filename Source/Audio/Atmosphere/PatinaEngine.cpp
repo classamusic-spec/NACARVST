@@ -126,9 +126,15 @@
 
     BYPASS.  With patina_on false and the engage fade already at zero, process()
     returns before touching the buffer - the output is the input sample for
-    sample.  Switching Patina on fades the wet in over about 8 ms; switching it
-    off fades out over the same 8 ms and only then starts returning early, so
-    neither edge clicks and the steady off state is still bit-exact.
+    sample.  Switching Patina on fades the wet in with an 8 ms time constant;
+    switching it off fades out with the same one and only then starts returning
+    early, so neither edge clicks and the steady off state is still bit-exact.
+
+    A TIME CONSTANT IS NOT A DURATION.  The fade is an exponential one-pole
+    against a 1e-4 early-out threshold, so reaching that threshold takes about
+    nine time constants - roughly 70 ms of full-cost processing after the module
+    is switched off, not 8.  Audibly it is gone long before then; it is the CPU
+    that is not.
 
     KNOWN LIMITATIONS - read these before believing anything above.
 
@@ -773,6 +779,7 @@ namespace nacar
                                            float tone, float wear, float smear,
                                            float bluntStep, float erosionThr,
                                            float noiseCore, float noiseLevel,
+                                           int noiseKind,
                                            const Surface& s) noexcept
         {
             // 1. four complementary bands.  These sum back to x exactly.
@@ -824,7 +831,13 @@ namespace nacar
             // 6. NOISE.  The core is shared between the channels; only the side
             //    component differs, and it is high-passed twice at 900 Hz so
             //    that nothing decorrelated reaches the low end.
-            float side = c.sideNoise.process (0);
+            //
+            //    The side uses the SAME exciter type as the core.  It used to
+            //    be hard-coded to WHITE, which meant every profile had a white
+            //    decorrelated component whatever it had chosen - SMOKE's
+            //    TEXTURE and CHROME's white were the same above 900 Hz, and the
+            //    profile only coloured the mono half of its own noise bed.
+            float side = c.sideNoise.process (noiseKind);
             side = c.sideHpB.highpass (c.sideHpA.highpass (side));
             side = c.sideLp.lowpass (side);
 
@@ -993,7 +1006,8 @@ namespace nacar
                 const float bluntStep = bluntBase * juce::jmax (0.02f, slow);
 
                 const float wetL = processChannel (channels[0], dryL, toneNow, w, smearNow,
-                                                   bluntStep, erosionThr, core, noiseLevel, surface)
+                                                   bluntStep, erosionThr, core, noiseLevel,
+                                                   noiseType, surface)
                                  * makeup;
 
                 const float e = juce::jlimit (0.0f, 1.0f, engage.at (i));
@@ -1003,7 +1017,8 @@ namespace nacar
                 if (stereo)
                 {
                     const float wetR = processChannel (channels[1], dryR, toneNow, w, smearNow,
-                                                       bluntStep, erosionThr, core, noiseLevel, surface)
+                                                       bluntStep, erosionThr, core, noiseLevel,
+                                                       noiseType, surface)
                                      * makeup;
 
                     r[i] = guard (lerp (dryR, wetR, e));

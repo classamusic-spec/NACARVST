@@ -107,7 +107,8 @@
     samples.  It is an integer, so the dry path is delayed by the same integer
     and the two are sample-aligned; no comb, no fractional interpolation on the
     dry signal.  The module therefore has 9 samples - 0.19 ms at 48 kHz - of
-    latency that nothing reports to the host.
+    latency, which NacarEngine adds to the chain total and NacarProcessor
+    reports to the host.
 
     REALTIME
 
@@ -117,9 +118,6 @@
 
     KNOWN LIMITATIONS
 
-      * 9 samples of undeclared latency whenever the module is active.  The fix
-        is a setLatencySamples() call from the processor, which is outside this
-        file.
       * The oversampled drive path runs even when DRIVE is zero, so that the
         latency does not change with a parameter.  The cost is the halfband
         round trip's own error, which the synth's round-trip test measures at
@@ -127,11 +125,6 @@
       * The bit depth is a block-rate constant, so a fast BITS automation moves
         in block-sized steps.  They are steps in the *step size*, not in the
         signal, so they do not click, but a very fast sweep is not smooth.
-      * The chain currently calls process() only while crush_on is true, so the
-        dry line is not written while the module is switched off and the first
-        nine samples after switching it back on are stale.  This engine already
-        handles being called with the flag false, so the fix is for the chain
-        to call it unconditionally or to call reset() when the flag falls.
       * DRIVE at maximum costs between 3 and 8 dB of level on loud material.
         The compensation is exact at small signal and tanh compresses above
         that, so a driven stage that does not get louder has to get quieter.
@@ -194,6 +187,7 @@ namespace nacar
     {
         dry.prepare (kDryTap + 8);
         tilt.prepare (sampleRate);
+        wetDc.prepare (sampleRate);
         reset();
     }
 
@@ -203,6 +197,7 @@ namespace nacar
         down.reset();
         dry.reset();
         tilt.reset();
+        wetDc.reset();
 
         error = 0.0f;
         held  = 0.0f;
@@ -270,17 +265,23 @@ namespace nacar
         float* left  = buffer.getWritePointer (0);
         float* right = numCh > 1 ? buffer.getWritePointer (1) : left;
 
-        const bool  enabled = params.flag (PID::crushOn);
-        const float mixP    = juce::jlimit (0.0f, 1.0f, params.raw (PID::crushMix));
+        const bool enabled = params.flag (PID::crushOn);
+
+        // Switching off ramps to zero mix rather than jumping to it; the
+        // smoother below reaches the target over the same time the on edge
+        // takes.  A bit crusher's wet signal is nothing like its dry one, so
+        // an instant swap in either direction is a step.
+        const float mixP = enabled ? juce::jlimit (0.0f, 1.0f, params.raw (PID::crushMix))
+                                   : 0.0f;
 
         // -------------------------------------------------------------------
-        //  BYPASS IS EXACT.  The buffer is untouched.  The dry lines are still
-        //  written, because the dry path is delayed by the halfband's latency:
-        //  if the line went stale while the module was off, the first samples
-        //  after it came back on would be nine samples of whatever was playing
-        //  when it was switched off.
+        //  BYPASS IS EXACT, ONCE THE RAMP HAS ARRIVED.  The buffer is
+        //  untouched.  The dry lines are still written, because the dry path is
+        //  delayed by the halfband's latency: if the line went stale while the
+        //  module was off, the first samples after it came back on would be
+        //  nine samples of whatever was playing when it was switched off.
         // -------------------------------------------------------------------
-        if (! enabled || (mixP <= 0.0f && mixSm.current <= 0.0f))
+        if (mixP <= 0.0f && mixSm.current <= 1.0e-4f)
         {
             for (int i = 0; i < n; ++i)
             {
@@ -442,6 +443,7 @@ namespace nacar
                 float y = ch.held * make;
 
                 y = ch.tilt.process (y, tone);
+                y = ch.wetDc.process (y);
 
                 const float dry = ch.dry.readInt (kDryTap);
 

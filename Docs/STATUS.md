@@ -1,6 +1,7 @@
 # NÁCAR — what is finished and what is not
 
-*Updated at the end of the Phase 1 / Phase 2 / synth-core build.*
+*Updated at the end of the Phase 9–17 build: Memory, modulation, the FX chain,
+the atmosphere modules, Weight, and the routing that joins them.*
 
 This document exists because the build specification forbids claiming a
 subsystem works when it does not. Read it before assuming anything below is
@@ -17,22 +18,22 @@ production-ready.
 | 3–6 | Synth core: voices, oscillators, characters, richness | **Built and measured, not auditioned** |
 | 7 | Synth performance: mono, legato, glide, expression | **Built, not auditioned** |
 | 8 | Synth quality gate: benchmarks | **29/29 pass; not accepted by ear** |
-| 9 | Memory | Not started |
-| 10 | Modulation / Breath | Parameters and UI only |
-| 11 | Pulse | Parameters and UI only |
-| 12 | Retro / Crush / Filter FX | Parameters and UI only |
-| 13 | Rewind | Parameters and UI only |
-| 14 | Grain | Parameters and UI only |
-| 15 | Space / Aura / Shadow / Patina | Parameters and UI only |
-| 16 | Weight / Alter | Parameters and UI only |
-| 17 | FX routing and locking | **State complete, DSP not started** |
+| 9 | Memory: four generations | **Built and measured, not auditioned** |
+| 10 | Modulation: LFOs, Breath, the matrix | **Built, measured and live** |
+| 11 | Pulse | **Built; two of five destinations consumed** |
+| 12 | Retro / Crush / Filter FX | **Built and measured, not auditioned** |
+| 13 | Rewind | **Built; repeats rather than one-shots** |
+| 14 | Grain | **Built and measured, not auditioned** |
+| 15 | Space / Aura / Shadow / Patina | **Built and measured, not auditioned** |
+| 16 | Weight | **Built and measured, not auditioned** |
+| 17 | FX routing and locking | **Complete: order, bypass and DSP all real** |
 | 18 | Sample import and waveform | **UI complete, decode not started** |
 | 19 | Audio analysis | Not started |
 | 20 | Harmony engine | Not started |
 | 21 | Mutation engine | **State complete, engine not started** |
 | 22 | Print / generations | Not started |
 | 23 | Make instrument | Not started |
-| 24 | Internal sound-design tools | Benchmark renderer only |
+| 24 | Internal sound-design tools | Benchmark renderer and stage attribution |
 | 25–27 | Golden presets, golden mutations, factory library | Not started |
 | 28–29 | Optimisation, full QA | Not started |
 
@@ -68,35 +69,63 @@ variation, two primary filter characters plus comb and formant, three envelopes,
 poly/mono/legato with glide, voice stealing, and frequency-dependent stereo with
 a mono low band. MIRAGE, HAZE and MASS share that core and differ in behaviour.
 
+**The chain processes.** Eleven engines behind the synth, in the order the
+specification sets out:
+
+```
+SOURCE → MEMORY → [ six user-orderable FX ] → SHADOW → AURA → PATINA → WEIGHT → output
+                    Retro Crush Filter
+                    Rewind Grain Space
+```
+
+Every one of them reads its own parameters and changes the sound. The six FX
+slots are reordered by dragging a card, and that order — packed into a single
+32-bit word with the bypass mask and published with one relaxed store — is what
+the audio thread actually runs.
+
+**Every engine is called on every block, whether it is on or not.** Each one
+manages its own bypass internally. This is not an oversight: Retro and Crush
+have to keep their delay lines fed or the power button clicks; Space, Aura and
+Shadow have to see the transition or they never flush their tails; Rewind and
+Grain need their history written continuously or engaging them plays silence.
+Gating the calls at the chain level took the silent-chain test from −10.7 dB to
+−145.9 dB when it was removed.
+
+The card's mute glyph works the same way. It used to skip the call — the same
+mistake, made a second time through a different control — so muting a card and
+switching it off produced different audio and different reported latency. The
+chain now applies the mute by forcing the module's own power flag, so there is
+one code path. Two tests assert the two routes agree: to −120 dB in the audio,
+and exactly in the latency the chain reports.
+
+**The modulation is live.** Two LFOs, Breath, Pulse and an Organic Random
+source, all at sample rate, plus an eight-slot matrix whose routings now reach
+the audio. A routing moves the parameter it targets, releases it when the
+routing is removed, and is clamped into the parameter's own range —
+`Source/Audio/Modulation/README.md` describes the overlay that makes that work
+without every engine having to know the matrix exists.
+
+**Memory has four generations, and they differ in kind.** Generation N runs N
+complete copies in series rather than one copy turned up, and the character
+table escalates per pass. Because each copy injects its noise early and every
+later copy re-copies it, a third-generation copy is not a first-generation copy
+with more of the same — which is the whole point of the control.
+
 ---
 
 ## What is UI and state only
 
-The FX chain, the atmosphere modules, Memory, Pulse and the modulation matrix
-have **complete interfaces and complete parameter and state plumbing, and no
-DSP behind them yet.** Turning the AURA knob writes a real automatable parameter
-that persists in the session; it does not currently change the sound.
+Three things, and they are now the exceptions rather than the rule:
 
-This is the order the specification itself sets out (§156, §157): the synth must
-be accepted before Memory and the effects ecosystem become the focus. It is
-recorded here rather than hidden because a control that writes a parameter no
-engine reads is easy to mistake for a working effect.
-
-Specifically not yet consuming their parameters:
-
-- `Source/Audio/Memory/` — the four generations
-- `Source/Audio/FX/` — Retro, Crush, Filter, Rewind, Grain, Space
-- `Source/Audio/Atmosphere/` — Aura, Shadow, Patina
-- `Source/Audio/Weight/` — Sub / Body / Air
-- `Source/Audio/Modulation/` — LFOs, Breath, Pulse, the matrix
-- `Source/Analysis/` — every analysis field in the state tree is still default
-- `Source/Mutation/` — recipes are generated and stored, nothing renders them
-
-The FX chain's **order and locks are real**: dragging a card rewrites the
-persisted order, and that order is what the DSP will read when it exists.
-Likewise the mutation panel writes genuine seeds and recipe history that the
-Phase 21 engine will consume — but PRINT and MAKE INSTRUMENT say plainly in the
-interface that they are waiting on that engine rather than pretending to work.
+- `Source/Analysis/` — every analysis field in the session tree is still
+  default. Nothing measures a sample.
+- `Source/Mutation/` — recipes are generated and stored, nothing renders them.
+  PRINT and MAKE INSTRUMENT say plainly in the interface that they are waiting
+  on that engine rather than pretending to work.
+- The **sequencer** (SEQ page) persists four lanes of sixteen steps with values,
+  gates, lengths and targets. Nothing advances them against the host clock. Its
+  PREVIEW playhead is an editing aid driven by the UI timer and is labelled as
+  such on the page.
 
 Dropping an audio file records its path in the session tree. It does **not**
 decode, analyse or play it — asynchronous decoding is Phase 18 and analysis is
@@ -112,35 +141,56 @@ make it look populated.
 
 ## What has been measured, and what has not
 
-`NacarBench` renders 29 engineering benchmarks offline and measures aliasing,
-mono retention, low-band L/R correlation, spectral balance, crest factor, DC and
-CPU against the specification's own thresholds. **All 29 pass.** `NacarTests`
-renders at 44.1 / 48 / 88.2 / 96 kHz across every supported block size and
-asserts the engine stays finite and bounded, that extreme resonance and drive do
-not blow the filters up, that the sub survives a mono fold, that all-notes-off
-actually silences it, and that voice stealing does not explode. **All 6243
-assertions pass.**
+`NacarBench` renders 29 engineering benchmarks offline — as the bare synth, and
+with `--chain`, through all eleven engines — and measures aliasing, mono
+retention, low-band L/R correlation, spectral balance, crest factor, DC and CPU
+against the specification's own thresholds. **All 29 pass in both modes.**
 
-Headline numbers:
+`NacarTests` renders at 44.1 / 48 / 88.2 / 96 kHz across every supported block
+size and asserts the engine stays finite and bounded, that extreme resonance and
+drive do not blow the filters up, that the sub survives a mono fold, that
+all-notes-off actually silences it, that voice stealing does not explode, that
+every FX order is stable, that a fully disabled chain is transparent, and that a
+mod-matrix routing changes the rendered audio. **3,111,827 assertions pass, 0
+fail.**
+
+Headline numbers, through the whole chain at its defaults:
 
 | | |
 |---|---|
-| Aliasing, bare saw at C7 | −40.3 dB inharmonic |
-| Aliasing added by drive, Body, saturation | none measurable |
-| Mono retention, worst of 29 patches | −0.6 dB |
-| Low-band L/R correlation, every bass patch | 1.00 |
-| DC offset, worst of 29 patches | 0.0004 |
-| Peak level, INIT patch | −12.3 dBFS |
-| CPU, 16 voices × 4 unison | 52 % of one core |
+| Threshold violations, 29 patches | **0** |
+| Mono retention, worst of 29 | −1.2 dB |
+| Mono retention, every bass and Reese patch | −0.1 dB or better |
+| Low-band L/R correlation, every bass and Reese patch | 0.98 – 1.00 |
+| DC offset, worst of 29 | 0.0001 |
+| Peak level, loudest of 29 | −5.3 dBFS |
+| Peak level, INIT patch | −12.7 dBFS |
+| Silent chain vs. dry | −145.9 dB |
+| CPU, 1 voice, whole chain | 12.3 % of one core |
+| CPU, 16 voices × 4 unison, whole chain | 62.3 % of one core |
+| CPU, the chain's own fixed cost | ≈ 9.5 % of one core per instance |
 
-Three real defects were found and fixed by these measurements rather than by
-inspection: a subsonic pile-up in the phase-modulated triangle, a filter applied
-as a per-sample gain ratio taken from the mono sum, and a half-sample
-misalignment in the oversampling halfband. All three produced plausible-looking
-audio.
+Bare synth, for comparison: 2.9 % of a core for one voice, 52.7 % at 16 × 4,
+and 126.6 % at 32 × 8 — which is over realtime and is stated as a limitation
+below rather than rounded down.
 
-`Source/Audio/Sources/Synth/README.md` documents the whole engine as
-specification §162 requires, including what is weak.
+**Measurement found defects that reading the code did not.** A filter applied as
+a per-sample gain ratio taken from the mono sum; a subsonic pile-up in the
+phase-modulated triangle; a half-sample misalignment in the oversampling
+halfband; a +2.1 dB bump at 300 Hz in Memory from recombining bands that the
+decorrelation had delayed unequally; decorrelation allpasses whose zero
+coefficient made them plain delays, offsetting the channels by up to nine
+samples even with decorrelation off. All five produced plausible-looking audio.
+
+`NacarBench --attribute` re-renders a patch adding one chain stage at a time and
+reports what each stage did to the stereo image. It exists because the
+alternative — inferring which of eleven engines widened a patch — is guessing.
+
+Every subsystem has a README that documents what it does and what is weak, as
+specification §162 requires:
+`Source/Audio/Sources/Synth/README.md`, `Source/Audio/Memory/README.md`,
+`Source/Audio/Modulation/README.md`, `Source/Audio/FX/README.md`,
+`Source/Audio/Atmosphere/README.md`, `Source/Audio/Weight/README.md`.
 
 **Those are measurements, not a verdict.** The acceptance standard (§163) is
 about how it *sounds*: whether the INIT patch feels premium, whether MASS bass
@@ -162,9 +212,13 @@ Stated plainly, because the specification forbids claiming otherwise:
 - **macOS and Windows have not been built.** The CMake is written for them and
   the code is platform-neutral, but only Linux has actually compiled.
 - **AU has not been built or validated.** `auval` has not run.
+- **Latency reporting has not been checked against a host.** The chain declares
+  Retro's, Crush's and Memory's onset delay through `AsyncUpdater`, and Memory's
+  figure *changes at runtime* with the generation. A host that reads latency
+  only at `prepareToPlay` will be wrong until it re-reads. Nobody has tried one.
 - **CPU has been measured but not profiled in a session.** `NacarBench --cpu`
-  gives per-configuration numbers on one machine; nobody has run several
-  instances in a DAW. 32 voices at 8× unison does not reach realtime there.
+  and `--cpu --chain` give per-configuration numbers on one machine; nobody has
+  run several instances in a DAW.
 - **The 20 golden benchmark patches are engineering probes, not presets.** They
   exist to exercise the engine's corners, not to be shipped.
 
@@ -172,12 +226,41 @@ Stated plainly, because the specification forbids claiming otherwise:
 
 ## Known limitations
 
-Subsystem-level limitations are documented next to the code that has them —
-see `Source/Audio/Sources/Synth/README.md` for the synth's, which covers the
-oscillator and anti-aliasing strategy, the unison normalisation formula, the
-filter architecture, the oversampling policy and what is weak.
+Subsystem-level limitations live next to the code that has them, in the six
+READMEs listed above. The ones that matter at instrument level:
 
-Interface-level:
+**DSP**
+
+- **32 voices at 8× unison exceeds realtime** — 137 % of one core through the
+  chain. SIMD in the oscillator inner loop is the obvious missing optimisation;
+  there is none anywhere in the build.
+- **Memory adds up to 12.3 ms of latency at generation IV** and is not
+  internally compensated. See *Not verified* above.
+- **ULTRA quality is accepted and stored but behaves as STUDIO.** 4×
+  oversampling is not implemented.
+- **The mod matrix is block-rate.** One value per parameter per block, so a
+  routing that sweeps fast enough steps at buffer boundaries. The destinations
+  where that would be audible — the synth's own LFO paths, Pulse's envelopes —
+  read per-sample buffers directly and do not go through the matrix.
+- **Four matrix sources read zero**: ENV 1, ENV 2, VELOCITY and KEY TRACK. They
+  are per-voice quantities, and making them work means the *voice* consulting
+  the matrix rather than the engine publishing a global average. A test asserts
+  they stay inert, so anybody who later wires a stand-in has to say so.
+- **Three of Pulse's five envelopes are generated and discarded.** VOLUME and
+  WIDTH are consumed by the output stage; FILTER, SPACE and MEMORY would each
+  have to be read by the engine that owns that behaviour, and none does yet.
+- **Pulse's SIDECHAIN source has no input.** NÁCAR is an instrument with no side
+  bus, so the transient detector behind it has never processed a sample.
+  Selecting SIDECHAIN falls back to CLOCK.
+- **Rewind has no one-shot trigger.** `ParameterList.h` has no trigger
+  parameter, so `rewind_on` is treated as a *repeat enable*: the gesture
+  re-fires on the musical grid when synced, every `rewind_length` seconds when
+  not, and on a Pulse trigger. It is a defensible reading of §88 — the power
+  button behaves like a trigger for a user who taps it — but it is not the
+  momentary control the specification describes, and adding one means a new
+  permanent parameter ID.
+
+**Interface**
 
 - `SegmentedControl`, `ToggleSwitch` and `GenerationSelector` read their
   parameter inside `paint()` rather than on their own clock. The editor sweeps
@@ -191,19 +274,23 @@ Interface-level:
 - The deep-edit pages (MOD, FX, SEQ, MIX) are new surfaces with no reference
   image behind them. They follow the chassis and the material language, but
   their internal layout is a design decision rather than a transcription.
-- The mod matrix and the sequencer store routings and step data that nothing
-  reads yet.
+- **Knobs show the user's value, not the modulated one.** There is no modulation
+  ring: a parameter an LFO is sweeping looks identical to one that is still.
+  That is the correct default — a cap that jitters cannot be read or typed into
+  — but the missing indicator is a real gap.
+- The sequencer stores step data that nothing reads yet.
 
 ---
 
 ## The next thing to do
 
-Listen to `NacarBench`'s output — it writes one WAV per benchmark. The
+Listen to `NacarBench`'s output — it writes one WAV per benchmark, and
+`--chain` writes the same patches through the whole instrument. The
 specification gates everything after Phase 8 on the synth sounding premium with
 all atmospheric processing disabled, and that judgement cannot be made from a
 table of numbers.
 
-After that, in the specification's own order: Memory (Phase 9), then modulation
-and Pulse, then the FX chain, then the atmosphere modules. The interfaces and
-the persisted state for all of them already exist and are waiting for engines to
-read them.
+After that, in the specification's own order: sample decoding and analysis
+(Phases 18–19), the harmony engine (20), and then the mutation engine (21),
+which is the piece the whole second half of the instrument is waiting on. The
+interfaces and the persisted state for all of them already exist.

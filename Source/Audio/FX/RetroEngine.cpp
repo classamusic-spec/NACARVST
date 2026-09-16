@@ -155,9 +155,14 @@
 
     KNOWN LIMITATIONS
 
-      * 4 ms of latency when the module is active, which nothing reports to the
-        host.  The fix is a setLatencySamples() call from the processor, which
-        is outside this file and would have to account for the whole chain.
+      * 4 ms of latency when the module is active.  NacarEngine adds it to the
+        chain total and NacarProcessor reports it to the host, but the figure
+        moves when the module is switched on or off, so a host that reads
+        latency only once will be wrong until it re-reads.
+      * The ON edge moves the dry path in time by those same 4 ms, because the
+        bypassed path is the undelayed input and the active path's dry tap is
+        the input delayed by the nominal offset.  Ramping the mix does not help;
+        it is the dry path itself that moves.
       * The resampling grid near the SAMPLER era aliases and is not
         oversampled.  That is deliberate - it is what a 26 kHz converter did -
         but it means ERA near 1 is not a clean stage.
@@ -168,13 +173,6 @@
         both the dry tap and the wet tap read from a transport that has not
         been written yet.  It is the same 4 ms as the latency and it only
         happens once per rate change.
-      * The chain currently calls process() only while retro_on is true, so
-        the transport is not written while the module is switched off and the
-        first 4 ms after switching it back on is whatever was last in the
-        delay line.  This engine already handles being called with the flag
-        false - it writes the transport and leaves the buffer untouched - so
-        the fix is for the chain to call it unconditionally, or to call
-        reset() on the falling edge of the flag.
       * The dropout scheduler is memoryless, so two events can overlap.  In
         practice that reads as one longer event; it is not modelled as such.
       * The resampling grid crossfades with the un-held signal as ERA morphs
@@ -458,17 +456,24 @@ namespace nacar
         float* left  = buffer.getWritePointer (0);
         float* right = numCh > 1 ? buffer.getWritePointer (1) : left;
 
-        const bool  enabled = params.flag (PID::retroOn);
-        const float mixP    = juce::jlimit (0.0f, 1.0f, params.raw (PID::retroMix));
+        const bool enabled = params.flag (PID::retroOn);
+
+        // Switching off is a ramp to zero mix, not a jump to it.  MIX defaults
+        // to 1.0, so an instant bypass replaces the entire output in one sample
+        // - the loudest click any control in the module can make.  Setting the
+        // target here and letting the smoother below reach it means the off
+        // edge glides over the same 25 ms the on edge does.
+        const float mixP = enabled ? juce::jlimit (0.0f, 1.0f, params.raw (PID::retroMix))
+                                   : 0.0f;
 
         // -------------------------------------------------------------------
-        //  BYPASS IS EXACT.  The output buffer is not touched at all - but the
-        //  transport keeps being written, so that un-bypassing does not play
-        //  back whatever happened to be in the delay line when it was switched
-        //  off.  Two stores per sample is a cheap way to make the module safe
-        //  to automate.
+        //  BYPASS IS EXACT, ONCE THE RAMP HAS ARRIVED.  The output buffer is
+        //  not touched at all - but the transport keeps being written, so that
+        //  un-bypassing does not play back whatever happened to be in the delay
+        //  line when it was switched off.  Two stores per sample is a cheap way
+        //  to make the module safe to automate.
         // -------------------------------------------------------------------
-        if (! enabled || (mixP <= 0.0f && mixSm.current <= 0.0f))
+        if (mixP <= 0.0f && mixSm.current <= 1.0e-4f)
         {
             for (int i = 0; i < n; ++i)
             {

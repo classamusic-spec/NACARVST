@@ -250,9 +250,13 @@ namespace nacar::fx
     //  Stereo history buffer
     //
     //  The circular store the signature Rewind -> Grain -> Space path reads
-    //  from (specification section 91).  One of these is written by the engine
-    //  every block and read by both Rewind and Grain, so the two agree on what
-    //  "recent history" means.
+    //  from (specification section 91).
+    //
+    //  Rewind and Grain own ONE EACH rather than sharing a single buffer.  The
+    //  chain is reorderable, so "recent history" is not one thing: what reached
+    //  Rewind and what reached Grain differ by whatever sits between them, and
+    //  a shared buffer would give one of the two the wrong signal in every
+    //  order but one.
     // =======================================================================
     class HistoryBuffer
     {

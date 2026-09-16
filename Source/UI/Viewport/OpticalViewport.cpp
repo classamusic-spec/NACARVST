@@ -103,7 +103,10 @@ namespace nacar::ui
         // output - it is never dressed up as a sample.
         waveField.setSynthSource (&visualizer);
         overviewView.setSynthSource (&visualizer);
-        waveField.setSourceLabel (juce::String ("SYNTH OUTPUT") + middleDot() + "LIVE LEVEL");
+        // INSTRUMENT, not SYNTH: the processor taps the scope after the whole
+        // chain and the master gain, so what this draws includes Memory, the
+        // FX slots and the atmosphere modules, not the voice core alone.
+        waveField.setSourceLabel (juce::String ("INSTRUMENT OUTPUT") + middleDot() + "LIVE LEVEL");
 
         visualizer.start();
 
@@ -664,7 +667,7 @@ namespace nacar::ui
             overviewView.setSourceKind (kind);
 
             waveField.setSourceLabel (kind == WaveformView::SourceKind::synthMonitor
-                                        ? juce::String ("SYNTH OUTPUT") + middleDot() + "LIVE LEVEL"
+                                        ? juce::String ("INSTRUMENT OUTPUT") + middleDot() + "LIVE LEVEL"
                                         : juce::String());
         }
 

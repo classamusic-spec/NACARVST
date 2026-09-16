@@ -74,6 +74,14 @@ namespace nacar
             fx::DelayLine        dry;     ///< compensates the halfband's latency
             fx::Tilt             tilt;
 
+            /** On the WET path only.  A mid-tread quantiser with error
+                feedback settles up to half a step away from zero, and at one
+                or two bits half a step is an enormous offset - large enough to
+                eat headroom in everything downstream and to move the chain's
+                measured DC.  The dry path is untouched, so exact bypass stays
+                exact. */
+            fx::DcBlocker        wetDc;
+
             float error = 0.0f;           ///< first-order quantiser error feedback
             float held  = 0.0f;           ///< the sample-and-hold's current value
 

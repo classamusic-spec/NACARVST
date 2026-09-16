@@ -846,7 +846,11 @@ namespace nacar
         const int   windowIx  = juce::jlimit (0, kNumWindows - 1, p.choice (PID::grainWindow));
         const float feedback  = juce::jlimit (0.0f, 0.95f, p.raw (PID::grainFeedback));
         const bool  freeze    = p.flag (PID::grainFreeze);
-        const float mixParam  = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainMix));
+        // Switching off ramps to zero mix rather than jumping to it: `mixRamp`
+        // below already glides from prevMix to this value, and using it for
+        // the on edge only would leave the off edge as a step.
+        const float mixParam  = enabled ? juce::jlimit (0.0f, 1.0f, p.raw (PID::grainMix))
+                                        : 0.0f;
 
         const int scaleTypeIx = juce::jlimit (0, 9, p.choice (PID::scaleType));
         const int harmonyIx   = juce::jlimit (0, 2, p.choice (PID::harmonyMode));
@@ -958,12 +962,12 @@ namespace nacar
             }
         }
 
-        // -- BYPASS: at zero mix nothing is audible, so nothing is run --------
+        // -- BYPASS: at zero mix, once the ramp has arrived, nothing is run ---
         //  The history is still written, because a granulator that only starts
         //  remembering when its mix opens has nothing to granulate.  The
         //  buffer is not touched at all, so the output is the input sample for
         //  sample rather than merely close to it.
-        if (! enabled || (mixParam <= 0.0f && prevMix <= 0.0f))
+        if (mixParam <= 0.0f && prevMix <= 1.0e-4f)
         {
             for (auto& g : grains)
                 g.active = false;

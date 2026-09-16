@@ -187,14 +187,19 @@
          40 % in the low mids, 12 % above 6 kHz).  The reciprocal square root of
          that is applied as a static trim.  Each mode's estimate is written to
          mirror the structure of its own process() line for line, so the two
-         cannot drift apart.  It is still an estimate about a spectrum this
+         cannot drift apart - with one stated exception, BODY's harmonics term;
+         see the note on `BodyMode::powerRatio`.  It is still an estimate about a spectrum this
          engine cannot see, so it is deliberately conservative.
 
       3  MEASURED RESIDUAL.  Two loudness meters, one on the input and one on
          the output, each a K-weighting-like pre-filter (two poles of highpass
          at 70 Hz, plus 4 dB of shelf above 1.5 kHz) into a 1.2 s mean square.
          The output is trimmed by sqrt(inputMeanSquare / outputMeanSquare),
-         clamped to +-3 dB and updated once per block, ramped across it.
+         clamped to +-3 dB on its own, and then the product of stages 2 and 3
+         is clamped again - asymmetrically, to -3.1 dB / +1.5 dB.  See the note
+         beside that second clamp: specification section 148 means the stage
+         that adds physical mass must not be able to add level as well.  It is
+         updated once per block and ramped across it.
 
          The weighting matters: an unweighted meter would measure SUB's new low
          end as loudness and pull the whole instrument down for adding exactly
@@ -219,8 +224,11 @@
     splits, and the output gain is `1 + amount * (trim - 1)`, so amount = 0 is
     the identity - but a complementary split reconstructs its input to within
     one float ulp rather than bitwise.  Measured at about 1.5e-8 on a 0.7
-    amplitude signal, which is -153 dB, and only reachable during the 20 ms
-    while the control is fading to zero.
+    amplitude signal, which is -153 dB, and only reachable while the control is
+    fading to zero.  That fade is an exponential with a 20 ms time constant
+    against a 1e-4 threshold, so the engine keeps running for roughly 180 ms
+    after macro_weight reaches zero - inaudible long before that, but paid for
+    in CPU until the early-out finally takes over.
 
     KNOWN LIMITATIONS - read these before believing anything above.
 
@@ -247,7 +255,14 @@
         calculation and not a measurement.
       - The feed-forward trim assumes a fixed spectral balance.  A patch that is
         all sub, or all air, will be mis-estimated; the measured residual then
-        has to do the work, and it is clamped at +-3 dB.
+        has to do the work, and it is clamped at +-3 dB - and their product is
+        clamped again at -3.1 dB / +1.5 dB, so a badly mis-estimated patch that
+        genuinely needs more than 1.5 dB of restoration will not get it.  That
+        is the intended trade: section 148 makes being too quiet the safer of
+        the two errors.
+      - Nothing measures whether the loudness match actually holds.  There is
+        no per-engine loudness test; the only level evidence is the chain
+        benchmark's peak and RMS columns, which cover the whole instrument.
       - The measured residual cannot distinguish "Weight made this louder" from
         "the player played louder", over a 1.2 s window, when the two coincide.
         In practice both meters see the same programme, so the ratio is stable,
@@ -564,6 +579,13 @@ namespace nacar
 
             void wake (float level) noexcept { comp.seed (level); }
 
+            /** HARMONICS is absent on purpose, and it is the one estimate here
+                that does not mirror its process() line: harmonics moves both
+                the shaper's drive and its asymmetric bias, but `shape()`
+                divides the small-signal gain back out, so to first order the
+                control changes the mid band's spectrum without changing its
+                power.  The residual it does add is left to the measured
+                residual to catch. */
             static float powerRatio (float amount, float /*harmonics*/, float compress) noexcept
             {
                 const float band = lerp (1.0f, kBodyMakeup
@@ -847,6 +869,25 @@ namespace nacar
             if (amountTarget <= 0.0f && amount.value() <= 1.0e-4f)
             {
                 amount.hold (0.0f);
+
+                // Keep both loudness meters running on the bypassed signal.
+                // They used to be updated only inside the sample loop below, so
+                // after a bypass they held a mean square from whatever was
+                // playing before it, and the first re-engaged block computed
+                // its correction from the wrong programme.  Feeding both with
+                // the same samples holds their ratio at exactly 1 while the
+                // engine is off, which is the correct starting point.
+                const bool  st = buffer.getNumChannels() > 1;
+                const auto* dl = buffer.getReadPointer (0);
+                const auto* dr = st ? buffer.getReadPointer (1) : dl;
+
+                for (int i = 0; i < n; ++i)
+                {
+                    const float mono = 0.5f * (dl[i] + dr[i]);
+                    inMeter.push (mono);
+                    outMeter.push (mono);
+                }
+
                 return;
             }
 
@@ -895,10 +936,22 @@ namespace nacar
             const float sumGain = juce::jmax (1.0e-6f, modeGain[0] + modeGain[1] + modeGain[2]);
             const float staticTrim = 1.0f / std::sqrt (juce::jmax (0.05f, ratio / sumGain));
 
-            const float measured = std::sqrt ((inMeter.meanSquare + 1.0e-10f)
-                                            / (outMeter.meanSquare + 1.0e-10f));
+            // The measured residual gets its own +-3 dB, so that a wrong
+            // feed-forward estimate cannot silently eat the correction's whole
+            // budget - which is what a single clamp on the product did.
+            const float residual = juce::jlimit (0.7f, 1.41f,
+                                                 std::sqrt ((inMeter.meanSquare + 1.0e-10f)
+                                                          / (outMeter.meanSquare + 1.0e-10f)));
 
-            const float wanted = juce::jlimit (0.7f, 1.41f, staticTrim * measured);
+            // ASYMMETRIC, and specification section 148 is the reason: "do not
+            // use loudness to fake quality".  Weight may cut by 3.1 dB and lift
+            // by at most 1.5 dB.  The downward direction is the safety - it is
+            // the only thing in this engine that can reduce gain at all, since
+            // the band compressor never does - while the upward direction
+            // exists only to undo an over-conservative feed-forward estimate,
+            // and an engine whose job is physical mass must not be able to win
+            // an A/B by being louder.
+            const float wanted = juce::jlimit (0.7f, 1.19f, staticTrim * residual);
 
             trimRamp.set (trim, wanted, n);
             trim = wanted;

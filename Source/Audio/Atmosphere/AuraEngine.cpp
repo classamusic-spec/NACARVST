@@ -170,15 +170,11 @@
       - Changing SIZE sweeps the delay reads rather than crossfading them.
       - The wet level has not been calibrated against anything.
       - The quality parameter is ignored; CPU has not been measured.
-      - INTEGRATION NOTE.  NacarEngine gates this engine on aura_on and does
-        not call it at all while the module is switched off, so the engine
-        never sees the block in which it was turned off and cannot flush its
-        tail there.  Turning Aura off and on again therefore resumes the tail
-        that was in the delay lines rather than starting clean.  The in-engine
-        flush covers the other route (DISTANCE reaching zero) because that one does
-        reach process().  The fix belongs in the chain - reset() the module
-        when its enable goes false, or drop the gate and let the engine's own
-        exact early-out do the work - and is one line either way.
+      - INTEGRATION NOTE, resolved.  NacarEngine calls this engine on every
+        block whether or not aura_on is true, so the engine does see the block
+        in which it was turned off and its own flush runs on that transition -
+        on both routes, the power ring and DISTANCE reaching zero.  Nothing
+        here depends on the chain gating, and the chain must not start.
 */
 
 namespace nacar

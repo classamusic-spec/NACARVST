@@ -275,12 +275,18 @@ namespace nacar
         float* left  = buffer.getWritePointer (0);
         float* right = numCh > 1 ? buffer.getWritePointer (1) : left;
 
-        const bool  enabled = params.flag (PID::fxFilterOn);
-        const float mixP    = juce::jlimit (0.0f, 1.0f, params.raw (PID::fxFilterMix));
+        const bool enabled = params.flag (PID::fxFilterOn);
 
-        // BYPASS IS EXACT.  Nothing to keep warm here - the module has no
-        // latency and no delayed dry path - so the buffer is simply left alone.
-        if (! enabled || (mixP <= 0.0f && mixSm.current <= 0.0f))
+        // Switching off ramps to zero mix rather than jumping to it.  A
+        // resonant filter's wet signal can be far from its dry one, and the
+        // whole point of the mix smoother is wasted if only one edge uses it.
+        const float mixP = enabled ? juce::jlimit (0.0f, 1.0f, params.raw (PID::fxFilterMix))
+                                   : 0.0f;
+
+        // BYPASS IS EXACT, ONCE THE RAMP HAS ARRIVED.  Nothing to keep warm
+        // here - the module has no latency and no delayed dry path - so the
+        // buffer is simply left alone.
+        if (mixP <= 0.0f && mixSm.current <= 1.0e-4f)
         {
             mixSm.holdAt (0.0f);
             return;

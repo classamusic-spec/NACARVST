@@ -243,8 +243,12 @@ the ratios as more meaningful than the absolutes:
   pretend otherwise.
 - **12.3 ms of uncompensated latency at generation IV**, and it *changes with
   the generation*, so a host that tracks plugin latency will see it move at
-  runtime. Nothing reports it yet. This is the single biggest thing wrong with
-  the engine.
+  runtime. `NacarEngine` adds `getLatencySamples()` to the chain total and
+  `NacarProcessor` reports it through an `AsyncUpdater`, so the figure is
+  declared rather than hidden - but a host that only reads latency at
+  `prepareToPlay` will still be wrong until it re-reads, and no host has been
+  tried. Nothing compensates it internally. This is the single biggest thing
+  wrong with the engine.
 - **Very bright material at maximum settings still ends up 8 dB down** after the
   make-up. Four copies genuinely remove that much top, and widening the make-up
   further would mean boosting a signal that has almost nothing left above 4 kHz.

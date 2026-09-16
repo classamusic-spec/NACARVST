@@ -283,6 +283,65 @@ namespace nacar
 
             The chain gating them would have broken both behaviours at once.
         */
+        /** The power parameter behind each card.  The `*_on` flags and the
+            FxOrder bypass mask are two controls over the same thing - the ring
+            on the card and the `-` glyph beside it - and the engines only know
+            about the first. */
+        static PID fxPowerPid (FxSlot slot) noexcept
+        {
+            switch (slot)
+            {
+                case FxSlot::retro:  return PID::retroOn;
+                case FxSlot::crush:  return PID::crushOn;
+                case FxSlot::filter: return PID::fxFilterOn;
+                case FxSlot::rewind: return PID::rewindOn;
+                case FxSlot::grain:  return PID::grainFxOn;
+                case FxSlot::space:  return PID::spaceOn;
+                case FxSlot::count:
+                default:             return PID::count;
+            }
+        }
+
+        /**
+            Applies the chain's bypass MASK the same way the power ring works:
+            by telling the engine it is off, not by refusing to call it.
+
+            This used to be `if (! order.isBypassed (slot)) runFxSlot (...)`,
+            which is the exact mistake the note on `runFxSlot` below warns
+            against, made a second time through a different control.  Muting a
+            card from the chain view starved Retro's and Crush's dry lines,
+            starved Rewind's and Grain's histories, and denied Space the
+            transition on which it flushes its tail - so the `-` glyph and the
+            power ring, which are the same idea to a user, behaved differently.
+
+            Forcing the flag instead means one code path: every engine sees a
+            power-off exactly as it always has, `updateLatency` stops reporting
+            a delay for a module that is muted, and the chain keeps running.
+        */
+        void applyFxBypass (const ParameterRegistry& p, const FxOrder& order)
+        {
+            for (int i = 0; i < numFxSlots; ++i)
+            {
+                const auto slot = (FxSlot) i;
+                const auto pid  = fxPowerPid (slot);
+
+                if (pid == PID::count)
+                    continue;
+
+                // A masked card, or one the order does not contain at all: an
+                // engine the chain will not reach must not keep sounding.
+                bool reached = false;
+
+                for (int j = 0; j < order.count && ! reached; ++j)
+                    reached = order.slots[(size_t) j] == slot;
+
+                if (reached && ! order.isBypassed (slot))
+                    p.clearModulation (pid);
+                else
+                    p.setModulation (pid, -1.0f);   // clamps to the flag's minimum
+            }
+        }
+
         void runFxSlot (FxSlot slot, juce::AudioBuffer<float>& b,
                         const ParameterRegistry& p, const MacroState& m)
         {
@@ -498,19 +557,19 @@ namespace nacar
             synth.process (view, midi, p, transport.bpm);
 
             // -- the chain ---------------------------------------------------
+            const auto order = FxOrder::unpack (packedOrder.load (std::memory_order_relaxed));
+
+            // Before updateLatency, because a masked module must not report a
+            // delay the signal does not actually incur.
+            applyFxBypass (p, order);
             updateLatency (p);
 
             memory.process (view, p, macros);
 
-            const auto order = FxOrder::unpack (packedOrder.load (std::memory_order_relaxed));
-
+            // Unconditionally, every block, in the user's order.  See
+            // runFxSlot and applyFxBypass above for why there is no `if` here.
             for (int i = 0; i < order.count; ++i)
-            {
-                const auto slot = order.slots[(size_t) i];
-
-                if (! order.isBypassed (slot))
-                    runFxSlot (slot, view, p, macros);
-            }
+                runFxSlot (order.slots[(size_t) i], view, p, macros);
 
             shadow.process (view, p, macros);
             aura.process   (view, p, macros);

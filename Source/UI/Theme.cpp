@@ -589,14 +589,19 @@ namespace nacar::theme
         const auto  ring  = juce::Rectangle<float> (outer * 2.0f, outer * 2.0f).withCentre (centre);
 
         // The seat is a well, so it is darkest where the light cannot reach -
-        // the upper-left, the side nearest the source.  That inversion is what
-        // makes a recess read as a recess rather than as a smaller disc.
+        // the upper-left, the side NEAREST the source, because that wall faces
+        // away from it.  That inversion is what makes a recess read as a recess
+        // rather than as a smaller disc.
+        //
+        // lightX/lightY point TOWARDS the light, so `centre + light * k` is the
+        // upper-left side.  This had the two ends the wrong way round and lit
+        // the seat like a raised object; a widget author caught it.
         juce::ColourGradient seat (ceramicDeep.withAlpha (0.55f),
-                                   centre.x - lightX * outer * 0.8f,
-                                   centre.y - lightY * outer * 0.8f,
+                                   centre.x + lightX * outer * 0.8f,
+                                   centre.y + lightY * outer * 0.8f,
                                    ceramicLight.withAlpha (0.0f),
-                                   centre.x + lightX * outer * 0.9f,
-                                   centre.y + lightY * outer * 0.9f, false);
+                                   centre.x - lightX * outer * 0.9f,
+                                   centre.y - lightY * outer * 0.9f, false);
 
         g.setGradientFill (seat);
         g.fillEllipse (ring);
@@ -655,28 +660,35 @@ namespace nacar::theme
             }
         }
 
-        // 3. The rim.  Lit on the side facing the light, lost on the far side,
-        //    and drawn as two arcs rather than one circle so that the two ends
-        //    genuinely differ.
+        // 3. The rim: lit on the side facing the light, lost on the far side.
+        //
+        //    ONE RING RAMPED ALONG THE LIGHT AXIS, not two arcs.  This was two
+        //    arcs and it was wrong twice over.  It was wrong in direction - the
+        //    angle was atan2 (-lightX, lightY), which negates both arguments
+        //    and lands exactly 180 degrees out, so every cap in the instrument
+        //    had its bright rim at the lower-right while its body gradient and
+        //    its specular were correctly at the upper-left.  And it was wrong
+        //    in kind: two arcs meet at a seam, and a turned edge has none.  A
+        //    widget author caught both, measured the first, and wrote the
+        //    replacement; this is that replacement, moved to where it belongs.
         {
-            const float rimR  = radius - 0.9f;
-            const float toward = std::atan2 (-lightX, lightY);   // JUCE arcs: 0 is up, cw
+            const float rimR = radius - 0.9f;
+            const float reach = radius * 0.95f;
 
-            juce::Path lit;
-            lit.addCentredArc (centre.x, centre.y, rimR, rimR, 0.0f,
-                               toward - 1.35f, toward + 1.35f, true);
+            juce::ColourGradient rim (juce::Colours::white.withAlpha (darkCap ? 0.34f : 0.88f),
+                                      centre.x + lightX * reach,
+                                      centre.y + lightY * reach,
+                                      juce::Colours::black.withAlpha (darkCap ? 0.70f : 0.34f),
+                                      centre.x - lightX * reach,
+                                      centre.y - lightY * reach, false);
 
-            g.setColour (juce::Colours::white.withAlpha (darkCap ? 0.28f : 0.85f));
-            g.strokePath (lit, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+            // Transparent at the midpoint, so the ring fades out where the edge
+            // turns away from the light rather than crossing through grey.
+            rim.addColour (0.5, juce::Colours::transparentBlack);
 
-            juce::Path dark;
-            dark.addCentredArc (centre.x, centre.y, rimR, rimR, 0.0f,
-                                toward + 1.55f, toward + 4.73f, true);
-
-            g.setColour (juce::Colours::black.withAlpha (darkCap ? 0.55f : 0.26f));
-            g.strokePath (dark, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
-                                                      juce::PathStrokeType::rounded));
+            g.setGradientFill (rim);
+            g.drawEllipse (juce::Rectangle<float> (rimR * 2.0f, rimR * 2.0f).withCentre (centre),
+                           1.8f);
         }
 
         // 4. A tight specular, the size of the light itself.  Small and bright

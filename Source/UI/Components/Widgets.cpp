@@ -1,5 +1,6 @@
 #include "Widgets.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -15,11 +16,20 @@ namespace nacar::ui
     // -----------------------------------------------------------------------
 
     // Knob (UI spec sections 4 and 10)
+    //
+    //  The allowance is what the parent leaves around the cap, and it is a
+    //  contract: MacroPanel and AtmospherePanel size their knob components as
+    //  the spec radius plus exactly this, so capRadius() lands the cap on the
+    //  radius Layout.h fixes.  It may be divided up differently - and is, below,
+    //  to narrow the channel - but its total must not change.
     static constexpr float knobArcSpanDeg    = 140.0f;  ///< +/- from 12 o'clock, so 280 deg total
-    static constexpr float knobGrooveGap     = 1.5f;    ///< clearance between the cap and the seat
-    static constexpr float knobGrooveWidth   = 5.0f;
-    static constexpr float knobSeatAllowance = knobGrooveGap + knobGrooveWidth + 0.5f;
-    static constexpr float knobArcWidth      = 3.4f;
+    static constexpr float knobSeatAllowance = 7.0f;
+    static constexpr float knobGrooveGap     = 2.2f;    ///< shelf between the cap and the channel
+    static constexpr float knobGrooveWidth   = 4.0f;
+    static constexpr float knobGrooveLip     = knobSeatAllowance - knobGrooveGap - knobGrooveWidth;
+    static constexpr float knobArcWidth      = 2.4f;    ///< leaves the channel visible either side
+    static constexpr float knobArcGlowWidth  = 3.4f;    ///< multiple of the arc width for its halo
+    static constexpr int   knobTurnRings     = 9;       ///< bound on the machined-face pass
     static constexpr float knobIndicatorIn   = 0.45f;   ///< fraction of the cap radius
     static constexpr float knobIndicatorOut  = 0.88f;
     static constexpr float knobIndicatorW    = 2.0f;
@@ -48,6 +58,91 @@ namespace nacar::ui
     // Inline value entry
     static constexpr int   valueEntryWidth    = 84;
     static constexpr int   valueEntryHeight   = 22;
+
+    // =======================================================================
+    //  Motion
+    // =======================================================================
+    namespace detail
+    {
+        namespace
+        {
+            constexpr int   motionHz      = 30;     ///< the rate the chassis paints at
+            constexpr float motionSettled = 0.004f; ///< below this, stop and land exactly
+        }
+
+        MotionTicker::~MotionTicker()
+        {
+            stopTimer();
+        }
+
+        void MotionTicker::add (Motion& m)
+        {
+            if (std::find (inFlight.begin(), inFlight.end(), &m) == inFlight.end())
+                inFlight.push_back (&m);
+
+            if (! isTimerRunning())
+                startTimerHz (motionHz);
+        }
+
+        void MotionTicker::remove (Motion& m)
+        {
+            inFlight.erase (std::remove (inFlight.begin(), inFlight.end(), &m), inFlight.end());
+
+            // Nothing is moving, so nothing needs a clock.  This is the whole
+            // reason one shared ticker is cheaper than a timer per widget.
+            if (inFlight.empty())
+                stopTimer();
+        }
+
+        void MotionTicker::timerCallback()
+        {
+            // Stepping repaints, and a repaint can in principle destroy a
+            // component, so the sweep runs over a copy and re-checks membership.
+            const auto snapshot = inFlight;
+
+            for (auto* m : snapshot)
+                if (std::find (inFlight.begin(), inFlight.end(), m) != inFlight.end())
+                    if (! m->advance())
+                        remove (*m);
+        }
+
+        void Motion::setTarget (float t)
+        {
+            t = juce::jlimit (0.0f, 1.0f, t);
+
+            if (std::abs (t - target) < 1.0e-4f)
+                return;
+
+            target = t;
+
+            if (std::abs (target - current) > motionSettled)
+                ticker->add (*this);
+            else
+                current = target;
+        }
+
+        void Motion::snapTo (float t)
+        {
+            current = target = juce::jlimit (0.0f, 1.0f, t);
+            ticker->remove (*this);
+        }
+
+        bool Motion::advance()
+        {
+            const float delta = target - current;
+
+            if (std::abs (delta) <= motionSettled)
+            {
+                current = target;
+                owner.repaint();
+                return false;
+            }
+
+            current += delta * rate;
+            owner.repaint();
+            return true;
+        }
+    }
 
     // =======================================================================
     //  Shared helpers
@@ -92,16 +187,6 @@ namespace nacar::ui
             return realValue;
         }
 
-        /** Hover lifts a surface, pressing darkens it.  Applied to the fill only:
-            nothing in this interface moves or resizes under the pointer. */
-        juce::Colour hoverLift (juce::Colour c, bool highlighted, bool down)
-        {
-            if (down)        return c.darker (0.06f);
-            if (highlighted) return c.brighter (0.04f);
-
-            return c;
-        }
-
         /** Point on a dial, angle measured clockwise from 12 o'clock. */
         juce::Point<float> pointOnDial (juce::Point<float> centre, float radius, float angle)
         {
@@ -133,6 +218,55 @@ namespace nacar::ui
             const auto& d = ParameterRegistry::definition (pid);
             return juce::String (d.name) + "\n" + juce::String (d.tooltip);
         }
+
+        // -------------------------------------------------------------------
+        //  Lighting
+        //
+        //  Everything directional in this file is built out of these three, so
+        //  no widget can quietly light itself from a direction of its own and
+        //  break the illusion for the panel it sits in.  The light is
+        //  theme::lightX / lightY: upper-left, and it never moves.
+        // -------------------------------------------------------------------
+
+        /** A ramp along the light axis of `area`: `nearLight` lands on the
+            upper-left, `farFromLight` on the lower-right. */
+        juce::ColourGradient acrossLight (juce::Rectangle<float> area,
+                                          juce::Colour nearLight, juce::Colour farFromLight,
+                                          float reach = 0.8f)
+        {
+            const float rx = area.getWidth()  * 0.5f * reach;
+            const float ry = area.getHeight() * 0.5f * reach;
+            const auto  c  = area.getCentre();
+
+            return { nearLight,    c.x + theme::lightX * rx, c.y + theme::lightY * ry,
+                     farFromLight, c.x - theme::lightX * rx, c.y - theme::lightY * ry, false };
+        }
+
+        /** Paints the annulus of the given mid-radius and width with whatever
+            fill is current - a gradient, usually. */
+        void fillRing (juce::Graphics& g, juce::Point<float> centre,
+                       float midRadius, float width)
+        {
+            if (midRadius <= 0.0f || width <= 0.0f)
+                return;
+
+            g.drawEllipse (squareAt (centre, midRadius), width);
+        }
+
+        /** Strokes an arc with whatever fill is current. */
+        void strokeArc (juce::Graphics& g, juce::Point<float> centre, float radius,
+                        float fromAngle, float toAngle, float thickness)
+        {
+            if (radius <= 0.0f || std::abs (toAngle - fromAngle) < 1.0e-3f)
+                return;
+
+            juce::Path p;
+            p.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, fromAngle, toAngle, true);
+
+            g.strokePath (p, juce::PathStrokeType (thickness, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+        }
+
     }
 
     // =======================================================================
@@ -287,6 +421,7 @@ namespace nacar::ui
         }
 
         isDragging = true;
+        pressMotion.setTarget (1.0f);
         dragStartValue = params.normalisedUserValue (pid);
         displayValue = targetValue = dragStartValue;
 
@@ -316,6 +451,7 @@ namespace nacar::ui
             return;
 
         isDragging = false;
+        pressMotion.setTarget (0.0f);
         params.endGesture (pid);
         repaint();
     }
@@ -327,6 +463,7 @@ namespace nacar::ui
         if (isDragging)
         {
             isDragging = false;
+            pressMotion.setTarget (0.0f);
             params.endGesture (pid);
         }
 
@@ -374,6 +511,7 @@ namespace nacar::ui
     void ParamControl::mouseEnter (const juce::MouseEvent&)
     {
         isHovered = true;
+        hoverMotion.setTarget (1.0f);
         refreshTooltip();
         repaint();
     }
@@ -381,6 +519,7 @@ namespace nacar::ui
     void ParamControl::mouseExit (const juce::MouseEvent&)
     {
         isHovered = false;
+        hoverMotion.setTarget (0.0f);
         repaint();
     }
 
@@ -561,62 +700,175 @@ namespace nacar::ui
         const float value   = juce::jlimit (0.0f, 1.0f, displayValue);
         const float angle   = -span + 2.0f * span * value;
         const float grooveR = r + knobGrooveGap + knobGrooveWidth * 0.5f;
+        const bool  dark    = style == Style::dark;
 
-        // 1. The seat groove: a machined recess just outside the cap, which is
-        //    where the value arc lives.
+        const float hover = hoverMotion.get();
+        const float press = pressMotion.get();
+
+        // The seat occupies the whole allowance the parent left around the cap,
+        // less the half pixel the outer lip needs to land inside the component.
+        const float seatOuter = r + knobGrooveGap + knobGrooveWidth + knobGrooveLip - 0.5f;
+        const float seatMid   = (r + seatOuter) * 0.5f;
+        const float seatWidth = seatOuter - r;
+        const auto  seatRect  = squareAt (centre, seatOuter);
+        const auto  cap       = squareAt (centre, r);
+
+        // 1. The seat.  A cap needs somewhere to be raised FROM, and a recess
+        //    reads as a recess only when its near wall - the one on the side the
+        //    light comes from - is the wall in shade.
+        //
+        //    theme::capSeat is deliberately NOT called here.  It was, as a body
+        //    pass under a correction pass, back when it ramped its shade from
+        //    the wrong side; that sign error has since been fixed in Theme.cpp,
+        //    and two passes both darkening the upper-left made the seat far too
+        //    heavy.  What follows is the fuller of the two - it has the channel
+        //    walls and the outer lip as well as the body - so it is the one that
+        //    stayed.  theme::capSeat remains in the vocabulary for callers that
+        //    want a plain seat and no channel.
         {
-            juce::Path groove;
-            groove.addCentredArc (centre.x, centre.y, grooveR, grooveR, 0.0f, -span, span, true);
+            // Light: the channel carries the depth, so the seat around it only
+            // has to say which side of the well the light cannot reach.
+            const auto wall = dark ? juce::Colours::black.withAlpha (0.70f)
+                                   : theme::ceramicDeep.withAlpha (0.60f);
 
-            g.setColour (theme::ceramicDark);
-            g.strokePath (groove, juce::PathStrokeType (knobGrooveWidth, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
+            auto grad = acrossLight (seatRect, wall, wall.withAlpha (wall.getFloatAlpha() * 0.12f), 0.95f);
+            grad.addColour (0.62, wall.withAlpha (wall.getFloatAlpha() * 0.35f));
 
-            juce::Path lip;
-            lip.addCentredArc (centre.x, centre.y, grooveR + knobGrooveWidth * 0.5f,
-                               grooveR + knobGrooveWidth * 0.5f, 0.0f, -span, span, true);
-
-            g.setColour (theme::ceramicDeep.withAlpha (0.5f));
-            g.strokePath (lip, juce::PathStrokeType (1.0f));
+            g.setGradientFill (grad);
+            fillRing (g, centre, seatMid, seatWidth);
         }
 
-        // 2. The value arc.  Unipolar sweeps from the low end, bipolar from
-        //    12 o'clock outward in whichever direction the value went.
+        // The outer lip, where the seat climbs back to the panel: lit on the far
+        // side from the light, lost on the near side, which is the inverse of
+        // the cap's own rim and is what makes the two read as opposite curves.
+        {
+            g.setGradientFill (acrossLight (seatRect,
+                                            juce::Colours::black.withAlpha (dark ? 0.55f : 0.22f),
+                                            juce::Colours::white.withAlpha (dark ? 0.16f : 0.55f),
+                                            0.95f));
+            fillRing (g, centre, seatOuter - 0.5f, 1.0f);
+        }
+
+        // 2. The groove: a machined channel cut into the seat, carrying the
+        //    value arc.  Its floor is shaded along the light axis, and its two
+        //    walls face opposite ways, so they catch opposite light.
+        {
+            const float outerLip = grooveR + knobGrooveWidth * 0.5f;
+            const float innerLip = grooveR - knobGrooveWidth * 0.5f;
+
+            const auto floorNear = dark ? juce::Colours::black
+                                        : theme::ceramicDeep.darker (0.45f);
+            const auto floorFar  = dark ? theme::glassDeep
+                                        : theme::ceramicDeep.brighter (0.06f);
+
+            g.setGradientFill (acrossLight (seatRect, floorNear, floorFar, 0.9f));
+            strokeArc (g, centre, grooveR, -span, span, knobGrooveWidth);
+
+            // Outer wall: faces inward, so it is lit on the lower-right - the
+            // same way round as the seat's own lip, which it runs along, so the
+            // two must agree or a seam shows where the groove ends.
+            g.setGradientFill (acrossLight (seatRect,
+                                            juce::Colours::black.withAlpha (dark ? 0.55f : 0.22f),
+                                            juce::Colours::white.withAlpha (dark ? 0.16f : 0.55f),
+                                            0.95f));
+            strokeArc (g, centre, outerLip - 0.5f, -span, span, 1.0f);
+
+            // Inner wall: faces outward, so it is lit on the upper-left.
+            g.setGradientFill (acrossLight (seatRect,
+                                            juce::Colours::white.withAlpha (dark ? 0.14f : 0.40f),
+                                            juce::Colours::black.withAlpha (0.30f),
+                                            0.9f));
+            strokeArc (g, centre, innerLip + 0.5f, -span, span, 1.0f);
+        }
+
+        // 3. The cap's own shadow, thrown down and to the right into the seat.
+        //    It lands before the arc, because the arc is the one thing here that
+        //    emits light rather than receiving it.
+        theme::contactShadow (g, cap.translated (0.8f, 0.0f), r,
+                              2.0f - press * 0.8f, 7.0f, 0.26f + press * 0.06f);
+
+        // 4. The value arc, glowing into the groove.  Unipolar sweeps from the
+        //    low end, bipolar from 12 o'clock outward in whichever direction the
+        //    value went.
         {
             const float from = isBipolar() ? 0.0f : -span;
 
             if (std::abs (angle - from) > 1.0e-3f)
             {
-                juce::Path arc;
-                arc.addCentredArc (centre.x, centre.y, grooveR, grooveR, 0.0f, from, angle, true);
-
-                const float glowAlpha = isDragging ? 0.55f : (isHovered ? 0.42f : 0.28f);
+                const float lit = juce::jmax (press, hover * 0.55f);
 
                 // theme::glow is a point halo; an arc carries its own by being
-                // stroked wide and faint underneath itself.
-                g.setColour (theme::violet.withAlpha (glowAlpha));
-                g.strokePath (arc, juce::PathStrokeType (knobArcWidth * 2.6f,
-                                                         juce::PathStrokeType::curved,
-                                                         juce::PathStrokeType::rounded));
+                // stroked wide and faint underneath itself.  Three passes, no
+                // more: this runs at 30 Hz behind every knob on the page.
+                g.setColour (theme::violet.withAlpha (0.16f + lit * 0.16f));
+                strokeArc (g, centre, grooveR, from, angle, knobArcWidth * knobArcGlowWidth);
+
+                g.setColour (theme::violet.withAlpha (0.42f + lit * 0.20f));
+                strokeArc (g, centre, grooveR, from, angle, knobArcWidth * 1.55f);
 
                 g.setColour (isDragging ? theme::violetLight : theme::violet);
-                g.strokePath (arc, juce::PathStrokeType (knobArcWidth,
-                                                         juce::PathStrokeType::curved,
-                                                         juce::PathStrokeType::rounded));
+                strokeArc (g, centre, grooveR, from, angle, knobArcWidth);
+
+                // The crest: the arc is a lit filament sitting in a channel, so
+                // its own upper edge is the brightest thing on the knob.
+                g.setColour (theme::violetLight.withAlpha (0.55f + lit * 0.25f));
+                strokeArc (g, centre, grooveR - knobArcWidth * 0.28f, from, angle, 0.9f);
             }
         }
 
-        // 3 and 4. The cap sits on the chassis, so it casts a contact shadow.
-        const auto cap = squareAt (centre, r);
+        // 5. The cap, turned from aluminium and lit from the upper-left.
+        theme::domeCap (g, centre, r, dark, hover);
 
-        theme::contactShadow (g, cap, r);
-        theme::machinedCap (g, centre, r, style == Style::dark);
 
-        // 5. One indicator line, the only thing on the cap that moves.
-        strokeLine (g, pointOnDial (centre, r * knobIndicatorIn,  angle),
-                       pointOnDial (centre, r * knobIndicatorOut, angle),
-                    knobIndicatorW,
-                    style == Style::dark ? theme::violet : theme::ink);
+        // 5c. The turned face.  theme::domeCap draws its machining at five per
+        //     cent of white, which at these radii is below what the display can
+        //     resolve, and without it an aluminium cap reads as a pearl.  These
+        //     are paired: a cut and the burr beside it, which is what a turned
+        //     surface actually is.
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+
+            juce::Path face;
+            face.addEllipse (cap.reduced (2.0f));
+            g.reduceClipRegion (face);
+
+            // Faint, and they stop well short of the middle: machining you can
+            // count the lines of is corduroy, and a cap that rings all the way
+            // in has a bullseye where it should have a plain centre.
+            const int rings = juce::jlimit (3, knobTurnRings, (int) (r / 9.0f));
+
+            for (int i = 1; i <= rings; ++i)
+            {
+                const float t  = (float) i / (float) (rings + 1);
+                const float rr = r * (0.95f - t * 0.62f);
+
+                g.setColour (juce::Colours::black.withAlpha (0.024f * (1.0f - t * 0.5f)));
+                g.drawEllipse (squareAt (centre, rr), 0.8f);
+
+                g.setColour (juce::Colours::white.withAlpha (0.032f * (1.0f - t * 0.5f)));
+                g.drawEllipse (squareAt (centre, rr + 1.0f), 0.8f);
+            }
+        }
+
+        // 6. One indicator line, the only thing on the cap that moves.  It is
+        //    incised rather than printed: the far side of an engraved channel
+        //    catches the light, so a bright line trails the dark one.
+        {
+            const auto in  = pointOnDial (centre, r * knobIndicatorIn,  angle);
+            const auto out = pointOnDial (centre, r * knobIndicatorOut, angle);
+            const juce::Point<float> away { -theme::lightX * 0.9f, -theme::lightY * 0.9f };
+
+            strokeLine (g, in.translated (away.x, away.y), out.translated (away.x, away.y),
+                        knobIndicatorW * 0.7f,
+                        dark ? theme::violet.withAlpha (0.30f)
+                             : juce::Colours::white.withAlpha (0.55f));
+
+            // A violet indicator on a near-black cap is a lamp, not a mark.
+            if (dark)
+                strokeLine (g, in, out, knobIndicatorW * 2.6f, theme::violet.withAlpha (0.22f));
+
+            strokeLine (g, in, out, knobIndicatorW, dark ? theme::violet : theme::ink);
+        }
 
         // 7. Label, 8. scale legend.  Both hang below the cap, so the parent
         //    sizes the component tall enough to contain them.
@@ -646,71 +898,95 @@ namespace nacar::ui
     // =======================================================================
     namespace
     {
-        /** Paints the pill body and returns the colour its text and icons take. */
+        /** Paints the pill body and returns the colour its text and icons take.
+
+            `press` and `hover` are 0..1 and animated: the dimensional routines
+            in Theme.h sink the object, tighten its shadow and move its specular
+            to the bottom edge as `press` rises, which is what a real key does
+            and what makes the difference between seeing a press and feeling it. */
         juce::Colour paintPillBackground (juce::Graphics& g, juce::Rectangle<float> b,
-                                          PillButton::Style style, bool selected,
-                                          bool highlighted, bool down, float corner)
+                                          PillButton::Style style, float selected,
+                                          float hover, float press, float corner)
         {
             using S = PillButton::Style;
+            using E = theme::Elevation;
 
             switch (style)
             {
                 case S::ceramic:
                 {
-                    theme::contactShadow (g, b, corner, down ? 1.0f : 2.0f, down ? 5.0f : 8.0f);
+                    // Selected reads as pressed IN rather than as tinted: the
+                    // face is brighter and it sits lower in its own shadow.
+                    const float sink = juce::jmax (press, selected * 0.62f);
 
-                    const auto top = selected ? theme::ceramicDark : theme::ceramicLight;
-                    const auto bot = selected ? theme::ceramicDeep : theme::ceramicMid;
+                    const auto top = theme::ceramicLight.brighter (selected * 0.30f);
+                    const auto bot = theme::ceramicMid  .brighter (selected * 0.45f);
 
-                    theme::ceramicSurface (g, b, corner, hoverLift (top, highlighted, down),
-                                                         hoverLift (bot, highlighted, down));
+                    theme::raisedCeramic (g, b, corner, E::resting, sink, hover, top, bot);
                     return theme::ink;
                 }
 
                 case S::glass:
                 {
-                    theme::glassSurface (g, b, corner, hoverLift (theme::glassRaised, highlighted, down));
+                    theme::raisedGlass (g, b, corner, E::resting, press, hover,
+                                        theme::glassRaised);
 
-                    if (! selected)
+                    if (selected <= 0.01f)
                         return theme::glassInk;
 
-                    g.setColour (theme::violet);
+                    // Selected glass is lit from inside its own edge rather than
+                    // outlined - an outline is a line, a rim is a thickness.
+                    theme::innerGlow (g, b, corner, theme::violet, 0.45f * selected, 5.0f);
+
+                    g.setColour (theme::violet.withAlpha (0.35f + 0.55f * selected));
                     g.drawRoundedRectangle (b.reduced (0.5f), corner, 1.0f);
-                    return theme::violet;
+
+                    return theme::glassInk.interpolatedWith (theme::violet, selected);
                 }
 
                 case S::violet:
                 {
-                    theme::contactShadow (g, b, corner, down ? 1.0f : 2.0f, down ? 5.0f : 8.0f);
-
-                    const auto top = theme::ceramicLight.interpolatedWith (theme::violetLight, 0.18f);
-                    const auto bot = theme::ceramicMid  .interpolatedWith (theme::violetLight, 0.18f);
-
-                    theme::ceramicSurface (g, b, corner, hoverLift (top, highlighted, down),
-                                                         hoverLift (bot, highlighted, down));
-
-                    g.setColour (theme::violetDeep);
-                    g.drawRoundedRectangle (b.reduced (0.5f), corner, 1.0f);
+                    theme::accentSurface (g, b, corner, theme::violet, press, hover);
                     return theme::ink;
                 }
 
                 case S::violetOutline:
                 {
-                    if (highlighted || down)
+                    // No body: this one is a rim with air behind it.  What it
+                    // gains is a thickness - a violet edge with the chassis
+                    // shading below it, and a glow that comes up on hover.
+                    const float lit = juce::jmax (hover, press);
+
+                    if (lit > 0.01f)
+                        theme::innerGlow (g, b, corner, theme::violet,
+                                          0.28f + 0.30f * press, 6.0f);
+
+                    if (press > 0.01f)
                     {
-                        g.setColour (theme::violet.withAlpha (down ? 0.18f : 0.10f));
+                        g.setColour (theme::violet.withAlpha (0.16f * press));
                         g.fillRoundedRectangle (b, corner);
                     }
 
-                    g.setColour (selected ? theme::violetLight : theme::violet);
+                    g.setColour (juce::Colours::black.withAlpha (0.18f * (1.0f - press)));
+                    g.drawRoundedRectangle (b.reduced (0.5f).translated (0.0f, 1.0f), corner, 1.0f);
+
+                    g.setColour (selected > 0.5f ? theme::violetLight : theme::violet);
                     g.drawRoundedRectangle (b.reduced (0.5f), corner, 1.0f);
+
                     return theme::violet;
                 }
 
                 case S::dashed:
                 default:
                 {
-                    // The FX "add slot": an outline with nothing in it yet.
+                    // The FX "add slot": a hole in the rack that nothing has
+                    // been put into yet.  It draws no fill - the rack behind it
+                    // already cuts the well this sits over, and filling here
+                    // would cover the floor you are meant to see.  What it adds
+                    // is the lip of the hole, and a light inside it on hover.
+                    if (hover > 0.01f)
+                        theme::innerGlow (g, b, corner, theme::violet, 0.30f * hover, 6.0f);
+
                     juce::Path outline;
                     outline.addRoundedRectangle (b.reduced (0.5f), corner);
 
@@ -718,9 +994,11 @@ namespace nacar::ui
                     juce::Path dashed;
                     juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
 
-                    g.setColour (theme::glassEdge.withAlpha (highlighted ? 1.0f : 0.8f));
+                    g.setColour (theme::glassEdge.brighter (0.30f * hover)
+                                                 .withAlpha (0.8f + 0.2f * hover));
                     g.fillPath (dashed);
-                    return theme::glassInkMuted;
+
+                    return theme::glassInkMuted.brighter (0.25f * hover);
                 }
             }
         }
@@ -757,7 +1035,16 @@ namespace nacar::ui
             return;
 
         selected = shouldBeSelected;
+        selectAnim.setTarget (selected ? 1.0f : 0.0f);
         repaint();
+    }
+
+    void PillButton::buttonStateChanged()
+    {
+        // juce::Button already tracks over / down for us; all this does is turn
+        // the two booleans into something that can travel.
+        hoverAnim.setTarget (isOver() ? 1.0f : 0.0f);
+        pressAnim.setTarget (isDown() ? 1.0f : 0.0f);
     }
 
     float PillButton::preferredWidth (float horizontalPadding) const
@@ -782,15 +1069,24 @@ namespace nacar::ui
 
     void PillButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     {
-        auto b = getLocalBounds().toFloat().reduced (1.0f);
+        const auto b = getLocalBounds().toFloat().reduced (1.0f);
 
-        if (down)
-            b = b.translated (0.0f, 0.5f);   // pressed settles into its own shadow
+        // The booleans JUCE hands paintButton are the truth; the motions are the
+        // same truth part-way there.  Nudging the targets from here keeps them
+        // honest if a state change ever arrives without buttonStateChanged.
+        hoverAnim.setTarget (highlighted ? 1.0f : 0.0f);
+        pressAnim.setTarget (down ? 1.0f : 0.0f);
 
-        auto colour = paintPillBackground (g, b, style, selected, highlighted, down, corner);
+        const float press = pressAnim.get();
+        const float sel   = selectAnim.get();
+
+        auto colour = paintPillBackground (g, b, style, sel, hoverAnim.get(), press, corner);
 
         if (! isEnabled())
             colour = colour.withAlpha (0.45f);
+
+        // Content travels with the face it is printed on.
+        const float travel = press * 0.8f + sel * 0.4f;
 
         const auto  font     = theme::label (textSize);
         const float iconSize = b.getHeight() * iconRatio;
@@ -805,22 +1101,25 @@ namespace nacar::ui
 
         float x = b.getCentreX() - content * 0.5f;
 
+        const float cy = b.getCentreY() + travel;
+
         if (leadingIcon.has_value())
         {
-            icons::draw (g, *leadingIcon, squareAt ({ x + iconSize * 0.5f, b.getCentreY() },
+            icons::draw (g, *leadingIcon, squareAt ({ x + iconSize * 0.5f, cy },
                                                     iconSize * 0.5f), colour);
             x += iconSize + gap;
         }
 
         g.setColour (colour);
-        theme::drawTracked (g, getButtonText(), { x, b.getY(), textW, b.getHeight() },
+        theme::drawTracked (g, getButtonText(),
+                            { x, b.getY() + travel, textW, b.getHeight() },
                             font, tracking, juce::Justification::centredLeft);
         x += textW;
 
         if (trailingIcon.has_value())
         {
             x += gap;
-            icons::draw (g, *trailingIcon, squareAt ({ x + iconSize * 0.5f, b.getCentreY() },
+            icons::draw (g, *trailingIcon, squareAt ({ x + iconSize * 0.5f, cy },
                                                      iconSize * 0.5f), colour);
         }
     }
@@ -846,97 +1145,181 @@ namespace nacar::ui
             return;
 
         active = shouldBeActive;
+        activeAnim.setTarget (active ? 1.0f : 0.0f);
         repaint();
+    }
+
+    void IconButton::buttonStateChanged()
+    {
+        hoverAnim.setTarget (isOver() ? 1.0f : 0.0f);
+        pressAnim.setTarget (isDown() ? 1.0f : 0.0f);
     }
 
     void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     {
-        const auto  b = getLocalBounds().toFloat().reduced (1.0f);
-        const float d = juce::jmin (b.getWidth(), b.getHeight());
+        hoverAnim.setTarget (highlighted ? 1.0f : 0.0f);
+        pressAnim.setTarget (down ? 1.0f : 0.0f);
+
+        const auto  b    = getLocalBounds().toFloat().reduced (1.0f);
+        const float d    = juce::jmin (b.getWidth(), b.getHeight());
         const auto  disc = squareAt (b.getCentre(), d * 0.5f);
 
-        auto colour = active ? activeColour : normalColour;
+        const float hover = hoverAnim.get();
+        const float press = pressAnim.get();
+        const float lit   = activeAnim.get();
 
+        auto colour = normalColour.interpolatedWith (activeColour, lit);
+
+        // Round or square, the surface is the same object lit from the same
+        // place; only its corner radius differs.
         switch (style)
         {
             case Style::plain:
                 break;
 
             case Style::glassRound:
-                theme::glassSurface (g, disc, d * 0.5f,
-                                     hoverLift (theme::glassRaised, highlighted, down));
+                theme::raisedGlass (g, disc, d * 0.5f, theme::Elevation::resting,
+                                    press, hover, theme::glassRaised);
                 break;
 
             case Style::ceramicRound:
-                theme::contactShadow (g, disc, d * 0.5f, down ? 1.0f : 2.0f, 7.0f);
-                theme::ceramicSurface (g, disc, d * 0.5f,
-                                       hoverLift (theme::ceramicLight, highlighted, down),
-                                       hoverLift (theme::ceramicMid,   highlighted, down));
+                theme::raisedCeramic (g, disc, d * 0.5f, theme::Elevation::resting,
+                                      press, hover);
                 break;
 
             case Style::glassSquare:
-                theme::glassSurface (g, b, iconSquareCorner,
-                                     hoverLift (theme::glassRaised, highlighted, down));
+                theme::raisedGlass (g, b, iconSquareCorner, theme::Elevation::resting,
+                                    press, hover, theme::glassRaised);
                 break;
 
             case Style::violetSquare:
-                // The active toolbar button in the reference viewport: a violet
-                // wash rather than a solid fill, so the glyph stays legible.
-                g.setColour (theme::violet.withAlpha (down ? 0.30f : (highlighted ? 0.26f : 0.22f)));
-                g.fillRoundedRectangle (b, iconSquareCorner);
-                g.setColour (theme::violet.withAlpha (0.75f));
+                // The active toolbar button in the reference viewport.  It is
+                // not a violet chip sitting on the glass - it is the glass with
+                // a light behind it, so it is cut IN and lit from inside.
+                theme::recessedWell (g, b, iconSquareCorner,
+                                     theme::glassDeep.interpolatedWith (theme::violet, 0.20f),
+                                     0.9f + press * 0.4f);
+
+                theme::innerGlow (g, b, iconSquareCorner, theme::violet,
+                                  0.55f + hover * 0.20f, 6.0f);
+
+                g.setColour (theme::violet.withAlpha (0.55f + hover * 0.25f));
                 g.drawRoundedRectangle (b.reduced (0.5f), iconSquareCorner, 1.0f);
+
                 colour = activeColour;
                 break;
         }
 
         if (! isEnabled())
             colour = colour.withAlpha (0.4f);
-        else if (highlighted && ! active && style == Style::plain)
-            colour = colour.brighter (0.25f);
+        else if (style == Style::plain)
+            colour = colour.brighter (0.25f * hover * (1.0f - lit));
 
-        icons::draw (g, icon, squareAt (b.getCentre(), d * ratio * 0.5f), colour);
+        // The glyph is printed on the face, so it travels with it.
+        icons::draw (g, icon, squareAt (b.getCentre().translated (0.0f, press * 0.8f),
+                                        d * ratio * 0.5f), colour);
     }
 
     // =======================================================================
     //  PowerButton
     // =======================================================================
     PowerButton::PowerButton (Tint t)
-        : juce::Button (juce::String()), tint (t)
+        : juce::Button (juce::String()),
+          tint (t),
+          // Mint is the FX rack, which is glass; violet is the atmosphere
+          // modules, which are ceramic.  See the note in Widgets.h.
+          seat (t == Tint::mint ? Seat::glass : Seat::ceramic)
     {
         // A power button is a latch, so callers only ever read getToggleState().
         setClickingTogglesState (true);
     }
 
+    void PowerButton::buttonStateChanged()
+    {
+        hoverAnim.setTarget (isOver() ? 1.0f : 0.0f);
+        pressAnim.setTarget (isDown() ? 1.0f : 0.0f);
+        onAnim   .setTarget (getToggleState() ? 1.0f : 0.0f);
+    }
+
     void PowerButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     {
+        hoverAnim.setTarget (highlighted ? 1.0f : 0.0f);
+        pressAnim.setTarget (down ? 1.0f : 0.0f);
+        onAnim   .setTarget (getToggleState() ? 1.0f : 0.0f);
+
         const auto  b      = getLocalBounds().toFloat();
         const auto  centre = b.getCentre();
         const float r      = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f - 1.0f;
-        const bool  on     = getToggleState();
         const auto  accent = tint == Tint::mint ? theme::mint : theme::violet;
         const auto  disc   = squareAt (centre, r);
 
-        // The halo reads first - this is the "alive" indicator on every FX card.
-        if (on)
-            theme::glow (g, centre, r * 1.9f, accent, highlighted ? 0.42f : 0.32f);
+        const float hover = hoverAnim.get();
+        const float press = pressAnim.get();
+        const float on    = onAnim.get();
 
-        theme::contactShadow (g, disc, r, down ? 1.0f : 2.0f, 6.0f, 0.16f);
+        // The halo the lamp throws onto whatever it is mounted in.  This reads
+        // first and from across the window: it is the "alive" indicator on
+        // every FX card and every atmosphere module.  Smaller on ceramic,
+        // where the surface is light and a wide halo turns into a smudge.
+        if (on > 0.01f && seat == Seat::ceramic)
+            theme::outerGlow (g, disc, r, accent,
+                              (0.20f + hover * 0.10f) * on * (1.0f - press * 0.25f), 5.0f);
 
-        g.setGradientFill (juce::ColourGradient (hoverLift (theme::ceramicLight, highlighted, down),
-                                                 centre.x, disc.getY(),
-                                                 hoverLift (theme::ceramicMid, highlighted, down),
-                                                 centre.x, disc.getBottom(), false));
-        g.fillEllipse (disc);
+        if (on > 0.01f && seat == Seat::glass)
+            theme::outerGlow (g, disc, r, accent,
+                              (0.34f + hover * 0.18f) * on * (1.0f - press * 0.25f), 8.0f);
 
-        g.setColour (theme::ceramicEdge);
-        g.drawEllipse (disc.reduced (0.5f), 1.0f);
+        if (seat == Seat::ceramic)
+        {
+            // UI spec section 8: "ceramic circles r 13 with a violet power
+            // glyph".  A raised disc rather than a lens - a lamp set into
+            // ceramic does not look like a lamp set into glass, and the module
+            // headers are ceramic.  The light comes from the GLYPH here, not
+            // from behind the face.
+            theme::contactShadow (g, disc, r, 2.0f - press * 0.9f, 6.0f,
+                                  0.22f - press * 0.06f);
 
-        if (on)
-            theme::glow (g, centre, r * 0.95f, accent, 0.30f);   // the lamp under the glyph
+            theme::domeCap (g, centre.translated (0.0f, press * 0.7f), r, false, hover);
 
-        icons::draw (g, icons::Icon::power, squareAt (centre, r * 0.5f),
-                     on ? accent : theme::inkFaint, 1.6f);
+            if (on > 0.01f)
+                theme::glow (g, centre, r * 0.72f, accent, 0.30f * on);
+
+            g.setColour (theme::ceramicEdge.interpolatedWith (accent, on * 0.85f)
+                             .withAlpha (0.60f + 0.35f * on));
+            g.drawEllipse (disc.reduced (1.0f), 1.0f + 0.4f * on);
+
+            icons::draw (g, icons::Icon::power,
+                         squareAt (centre.translated (0.0f, press * 0.7f), r * 0.5f),
+                         theme::inkFaint.interpolatedWith (accent.darker (0.25f), on)
+                             .brighter (0.18f * hover),
+                         1.6f);
+            return;
+        }
+
+        // A dark lens set into the card, not a button printed on it: dead dark
+        // glass when it is off, and the same glass with something behind it
+        // when it is on.
+        theme::recessedWell (g, disc, r,
+                             theme::glassDeep.interpolatedWith (accent, 0.12f * on),
+                             1.0f + press * 0.35f);
+
+        if (on > 0.01f)
+        {
+            theme::innerGlow (g, disc, r, accent, 0.55f * on, 5.0f);
+            theme::glow (g, centre, r * 0.85f, accent, 0.26f * on);   // the lamp itself
+        }
+
+        // The ring: the bezel the lens is held by, which is what actually
+        // carries the colour at this size.
+        g.setColour (theme::glassEdge.interpolatedWith (accent, on)
+                         .withAlpha (0.55f + 0.40f * on + 0.10f * hover));
+        g.drawEllipse (disc.reduced (1.0f), 1.3f + 0.4f * on);
+
+        icons::draw (g, icons::Icon::power,
+                     squareAt (centre.translated (0.0f, press * 0.6f), r * 0.5f),
+                     theme::glassInkFaint.interpolatedWith (accent, on)
+                         .brighter (0.20f * hover),
+                     1.6f);
     }
 
     // =======================================================================
@@ -1014,70 +1397,73 @@ namespace nacar::ui
             selectedIndex = juce::jlimit (0, juce::jmax (0, options.size() - 1),
                                           boundIndex (*boundParams, boundPid, selectedIndex));
 
+        const int   count  = juce::jmax (1, options.size());
         const auto  b      = getLocalBounds().toFloat().reduced (0.5f);
         const float corner = juce::jmin (layout::radiusPill, b.getHeight() * segmentCornerRatio);
         const float inner  = juce::jmax (0.0f, corner - segmentInset);
 
-        if (style == Style::recessed)
-        {
-            // Spec section 4: WEIGHT's unselected segments sit flush with the
-            // panel, so the track is no more than a hairline.
-            g.setColour (theme::ceramicEdge.withAlpha (0.6f));
-            g.drawRoundedRectangle (b, corner, 1.0f);
-        }
-        else
-        {
-            g.setColour (theme::ceramicDark);
-            g.fillRoundedRectangle (b, corner);
+        // Where the raised segment is, as opposed to which one is selected: it
+        // travels, and the travel is most of what tells the eye that the thing
+        // sliding is an object and the thing it slides in is a channel.
+        const float lastIndex = (float) juce::jmax (1, count - 1);
+        selectPos.setTarget ((float) selectedIndex / lastIndex);
 
+        const float pos = selectPos.get() * lastIndex;
+
+        // 1. The track, cut into the chassis.  A raised segment only reads as
+        //    raised against something that reads as below the surface.
+        theme::recessedWell (g, b, corner,
+                             style == Style::recessed ? theme::ceramicMid.darker (0.06f)
+                                                      : theme::ceramicDark,
+                             style == Style::recessed ? 0.75f : 1.15f);
+
+        // 2. The selected segment, a solid object sitting in that well.
+        {
+            const float w   = b.getWidth() / (float) count;
+            const auto  seg = juce::Rectangle<float> (b.getX() + w * pos, b.getY(), w, b.getHeight())
+                                  .reduced (segmentInset, segmentInset);
+
+            // Clipped to the track, because a thing inside a channel cannot
+            // throw its shadow or its glow over the channel's own walls.
             juce::Graphics::ScopedSaveState ss (g);
-            juce::Path clip;
-            clip.addRoundedRectangle (b, corner);
-            g.reduceClipRegion (clip);
 
-            g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.16f),
-                                                     b.getCentreX(), b.getY(),
-                                                     juce::Colours::transparentBlack,
-                                                     b.getCentreX(), b.getY() + b.getHeight() * 0.6f,
-                                                     false));
-            g.fillRect (b);
+            juce::Path well;
+            well.addRoundedRectangle (b.reduced (0.5f), corner);
+            g.reduceClipRegion (well);
+
+            switch (style)
+            {
+                case Style::violetFill:
+                    theme::accentSurface (g, seg, inner, theme::violet, 0.0f, 0.0f);
+                    break;
+
+                case Style::darkFill:
+                    theme::raisedGlass (g, seg, inner, theme::Elevation::resting,
+                                        0.0f, 0.0f, theme::glassMid);
+                    break;
+
+                case Style::recessed:
+                default:
+                    theme::raisedCeramic (g, seg, inner, theme::Elevation::resting, 0.0f, 0.0f);
+                    break;
+            }
         }
 
+        // 3. The labels.  A label belongs to the chip while the chip is under
+        //    it, so its colour crosses over as the chip travels rather than
+        //    snapping when the index changes.
         const auto font = theme::label (textSize);
 
         for (int i = 0; i < options.size(); ++i)
         {
-            const auto seg = segmentBounds (i).reduced (segmentInset, segmentInset);
-            auto textColour = (i == hoverIndex ? theme::ink : theme::inkMuted);
+            const auto  seg  = segmentBounds (i).reduced (segmentInset, segmentInset);
+            const float onIt = juce::jlimit (0.0f, 1.0f, 1.0f - std::abs ((float) i - pos));
 
-            if (i == selectedIndex)
-            {
-                switch (style)
-                {
-                    case Style::violetFill:
-                        g.setColour (theme::violet.withAlpha (0.85f));
-                        g.fillRoundedRectangle (seg, inner);
-                        textColour = theme::ink;     // dark on violet reads better than white
-                        break;
+            const auto off = (i == hoverIndex ? theme::ink : theme::inkMuted);
+            const auto onC = style == Style::darkFill ? theme::glassInk
+                                                      : theme::ink;   // dark on violet reads better
 
-                    case Style::darkFill:
-                        g.setColour (theme::glassMid);
-                        g.fillRoundedRectangle (seg, inner);
-                        textColour = theme::glassInk;
-                        break;
-
-                    case Style::recessed:
-                    default:
-                        g.setColour (theme::ceramicDark);
-                        g.fillRoundedRectangle (seg, inner);
-                        g.setColour (theme::ceramicEdge.withAlpha (0.5f));
-                        g.drawRoundedRectangle (seg.reduced (0.5f), inner, 1.0f);
-                        textColour = theme::ink;
-                        break;
-                }
-            }
-
-            g.setColour (textColour);
+            g.setColour (off.interpolatedWith (onC, onIt));
             theme::drawTracked (g, options[i], seg, font, tracking, juce::Justification::centred);
         }
     }
@@ -1124,7 +1510,9 @@ namespace nacar::ui
         boundPid = p;
 
         state = boundIndex (registry, p, state ? 1 : 0) > 0;
-        animated = state ? 1.0f : 0.0f;
+
+        // Restored state is not a gesture, so it must not be seen to travel.
+        animated.snapTo (state ? 1.0f : 0.0f);
 
         setTooltip (tooltipFor (p));
         repaint();
@@ -1137,11 +1525,10 @@ namespace nacar::ui
 
         state = shouldBeOn;
 
-        // The switch is intentionally instantaneous: Widgets.h is frozen and
-        // gives ToggleSwitch no Timer base, and animating from paint() would tie
-        // the travel to whatever else happens to be repainting.  `animated`
-        // therefore follows the state directly.
-        animated = state ? 1.0f : 0.0f;
+        // The thumb travels.  It is driven by the shared motion ticker rather
+        // than by a Timer of this switch's own: there are eight of these in the
+        // preserve row alone, and at most one of them is ever moving.
+        animated.setTarget (state ? 1.0f : 0.0f);
         repaint();
 
         if (notification == juce::dontSendNotification)
@@ -1159,8 +1546,13 @@ namespace nacar::ui
         if (boundParams != nullptr && boundPid != PID::count)
         {
             // Same polling-on-repaint arrangement as SegmentedControl.
-            state = boundIndex (*boundParams, boundPid, state ? 1 : 0) > 0;
-            animated = state ? 1.0f : 0.0f;
+            const bool live = boundIndex (*boundParams, boundPid, state ? 1 : 0) > 0;
+
+            if (live != state)
+            {
+                state = live;
+                animated.setTarget (state ? 1.0f : 0.0f);
+            }
         }
 
         // Size::large is the SHADOW module's header toggle, which is drawn at
@@ -1173,31 +1565,41 @@ namespace nacar::ui
 
         const float r     = track.getHeight() * 0.5f;
         const float knobR = juce::jmax (1.0f, r - switchKnobInset);
+        const float on    = animated.get();
+        const float hover = hoverAnim.get();
 
-        g.setColour (state ? theme::violet
-                           : (hovered ? theme::ceramicDark.brighter (0.05f) : theme::ceramicDark));
-        g.fillRoundedRectangle (track, r);
+        // The track is a channel cut into the chassis, so the thumb has a floor
+        // to sit on rather than a colour to sit next to.
+        // ceramicDark is only a shade off the panel it is cut into, and at
+        // 26 x 14 that is not enough contrast for a slot to read as a slot, so
+        // the off state goes down to the bottom of the ceramic ramp.
+        theme::recessedWell (g, track, r,
+                             theme::ceramicDeep.darker (0.34f)
+                                 .interpolatedWith (theme::violetDeep, on)
+                                 .brighter (hover * 0.08f),
+                             1.35f);
 
-        g.setColour (juce::Colours::black.withAlpha (0.12f));
-        g.drawRoundedRectangle (track.reduced (0.5f), r, 1.0f);
+        if (on > 0.01f)
+            theme::innerGlow (g, track, r, theme::violetLight, 0.45f * on, 4.0f);
 
-        const juce::Point<float> knobCentre { juce::jmap (animated, track.getX() + r,
+        const juce::Point<float> knobCentre { juce::jmap (on, track.getX() + r,
                                                           track.getRight() - r),
                                               track.getCentreY() };
 
-        if (state)
-            theme::glow (g, knobCentre, knobR * 2.2f, theme::violet, 0.35f);
+        const auto thumb = squareAt (knobCentre, knobR);
 
-        theme::contactShadow (g, squareAt (knobCentre, knobR), knobR, 1.0f, 4.0f, 0.22f);
+        // The thumb is a raised ceramic object with its own contact shadow, and
+        // theme::raisedCeramic draws exactly that - a circle is a rounded
+        // rectangle whose corner is its own half-height.
+        theme::raisedCeramic (g, thumb, knobR, theme::Elevation::resting, 0.0f, hover);
 
-        g.setGradientFill (juce::ColourGradient (state ? theme::glassInk    : theme::ceramicLight,
-                                                 knobCentre.x, knobCentre.y - knobR,
-                                                 state ? theme::ceramicLight : theme::ceramicMid,
-                                                 knobCentre.x, knobCentre.y + knobR, false));
-        g.fillEllipse (squareAt (knobCentre, knobR));
-
-        g.setColour (state ? theme::violetDeep : theme::ceramicEdge);
-        g.drawEllipse (squareAt (knobCentre, knobR).reduced (0.5f), 1.0f);
+        // Lit from underneath when the switch is on, which is what makes the
+        // violet read as coming from the channel rather than from the thumb.
+        if (on > 0.01f)
+        {
+            g.setColour (theme::violetDeep.withAlpha (0.55f * on));
+            g.drawEllipse (thumb.reduced (0.5f), 1.0f);
+        }
     }
 
     void ToggleSwitch::mouseDown (const juce::MouseEvent&)
@@ -1207,13 +1609,13 @@ namespace nacar::ui
 
     void ToggleSwitch::mouseEnter (const juce::MouseEvent&)
     {
-        hovered = true;
+        hoverAnim.setTarget (1.0f);
         repaint();
     }
 
     void ToggleSwitch::mouseExit (const juce::MouseEvent&)
     {
-        hovered = false;
+        hoverAnim.setTarget (0.0f);
         repaint();
     }
 
@@ -1322,14 +1724,34 @@ namespace nacar::ui
 
             if (isActive)
             {
+                // An emitting object: a halo on the chassis, a rim of its own
+                // colour, and a core brighter than either.
+                const auto lamp = squareAt (dot, layout::macro::genDotRActive);
+
                 theme::glow (g, dot, genGlowRadius, theme::violet, 0.45f);
+                theme::outerGlow (g, lamp, layout::macro::genDotRActive, theme::violet,
+                                  0.40f, 5.0f);
+
                 g.setColour (theme::violet);
-                g.fillEllipse (squareAt (dot, layout::macro::genDotRActive));
+                g.fillEllipse (lamp);
+
+                g.setGradientFill (acrossLight (lamp, theme::violetLight, theme::violetDeep, 0.9f));
+                g.fillEllipse (lamp.reduced (0.6f));
+
+                g.setColour (theme::violetLight.withAlpha (0.9f));
+                g.fillEllipse (squareAt (dot.translated (theme::lightX * layout::macro::genDotRActive * 0.35f,
+                                                         theme::lightY * layout::macro::genDotRActive * 0.35f),
+                                         layout::macro::genDotRActive * 0.34f));
             }
             else
             {
-                g.setColour (i == hover ? theme::ceramicDeep.brighter (0.15f) : theme::ceramicDeep);
-                g.fillEllipse (squareAt (dot, layout::macro::genDotR));
+                // A blind hole in the ceramic: dark floor, its near wall in
+                // shade, a catch of light on the far one.
+                const auto well = squareAt (dot, layout::macro::genDotR);
+                const float lift = (i == hover ? 0.15f : 0.0f);
+
+                theme::recessedWell (g, well, layout::macro::genDotR,
+                                     theme::ceramicDeep.brighter (lift), 1.25f);
             }
 
             const float baseline = row.getCentreY() + font.getAscent() - font.getHeight() * 0.5f;
@@ -1402,27 +1824,70 @@ namespace nacar::ui
         if (x1 <= x0)
             return;
 
-        const float x = juce::jmap (value, x0, x1);
+        const float x     = juce::jmap (value, x0, x1);
+        const float hover = hoverAnim.get();
+        const float press = pressAnim.get();
 
-        theme::hairline (g, { x0, y }, { x1, y });
+        // The track is a channel, not a rule: 3 px of well is the least that can
+        // carry an inner shadow and still read as a hairline at this size.
+        //
+        // It is cut into glass - this slider only exists in the viewport - so it
+        // is darker than its ground rather than lighter, and it is the cap that
+        // carries the light.
+        const juce::Rectangle<float> track (x0 - 1.0f, y - 1.5f,
+                                            (x1 - x0) + 2.0f, 3.0f);
 
-        g.setColour (theme::violet);
-        g.drawLine (x0, y, x, y, 1.0f);
+        theme::recessedWell (g, track, 1.5f, theme::glassDeep, 1.0f);
+
+        g.setColour (theme::glassEdge.withAlpha (0.8f));
+        g.drawRoundedRectangle (track.reduced (0.25f), 1.5f, 0.6f);
+
+        // The travelled part of the channel is lit from within.
+        if (x > x0 + 0.5f)
+        {
+            const juce::Rectangle<float> lit (track.getX(), track.getY(),
+                                              x - track.getX(), track.getHeight());
+
+            g.setColour (theme::violet.withAlpha (0.28f + hover * 0.14f));
+            g.fillRoundedRectangle (lit.expanded (0.0f, 1.2f), 2.2f);
+
+            g.setColour (theme::violet);
+            g.fillRoundedRectangle (lit, 1.5f);
+        }
 
         const juce::Point<float> cap { x, y };
+        const float capR = hairlineCapR - press * 0.4f;
 
-        theme::contactShadow (g, squareAt (cap, hairlineCapR), hairlineCapR, 1.5f, 5.0f, 0.22f);
-        theme::machinedCap (g, cap, hairlineCapR);
+        theme::contactShadow (g, squareAt (cap, capR).translated (0.6f, 0.0f), capR,
+                              1.6f - press * 0.6f, 5.0f, 0.26f);
+
+        theme::domeCap (g, cap, capR, false, hover);
     }
 
     void HairlineSlider::mouseDown (const juce::MouseEvent& e)
     {
+        pressAnim.setTarget (1.0f);
         setFromMouse (e);
     }
 
     void HairlineSlider::mouseDrag (const juce::MouseEvent& e)
     {
         setFromMouse (e);
+    }
+
+    void HairlineSlider::mouseUp (const juce::MouseEvent&)
+    {
+        pressAnim.setTarget (0.0f);
+    }
+
+    void HairlineSlider::mouseEnter (const juce::MouseEvent&)
+    {
+        hoverAnim.setTarget (1.0f);
+    }
+
+    void HairlineSlider::mouseExit (const juce::MouseEvent&)
+    {
+        hoverAnim.setTarget (0.0f);
     }
 
     void HairlineSlider::setFromMouse (const juce::MouseEvent& e)
@@ -1448,8 +1913,15 @@ namespace nacar::ui
         // component instead of straddling its boundary.
         const auto b = getLocalBounds().toFloat().reduced (0.5f);
 
-        theme::contactShadow (g, b, corner);
-        theme::ceramicSurface (g, b, corner);
+        // A panel is the largest raised object in the chassis, and it is lit by
+        // the same light as the smallest: the specular runs along its top edge,
+        // the bevel along its bottom, and the sheen comes from the upper-left.
+        //
+        // Elevation::resting rather than ::raised, because spec section 1 fixes
+        // the chassis bevel at 60 % white over 22 % black and that is what
+        // resting draws.  A brighter edge on a panel this size stops reading as
+        // a bevel and starts reading as a drawn line.
+        theme::raisedCeramic (g, b, corner, theme::Elevation::resting);
     }
 
     GlassPanel::GlassPanel (float cornerRadius)
@@ -1459,8 +1931,35 @@ namespace nacar::ui
 
     void GlassPanel::paint (juce::Graphics& g)
     {
-        // Glass is a cut-out, so it never carries a drop shadow (spec section 1).
-        theme::glassSurface (g, getLocalBounds().toFloat().reduced (0.5f), corner, fill);
+        // Glass is a cut-out, so it never carries a drop shadow (spec section 1)
+        // - it carries the opposite, an inner shadow under its top edge and a
+        // catch of light along its bottom one.
+        const auto b = getLocalBounds().toFloat().reduced (0.5f);
+
+        theme::recessedWell (g, b, corner, fill, 1.2f);
+
+        // Four one-pixel bands do not reach far enough for a cut-out this deep,
+        // so the top of the well is carried further in by a gradient.  It lands
+        // over the bands, which are black already, and leaves the catch of light
+        // along the bottom untouched.
+        {
+            const float depth = juce::jmin (16.0f, b.getHeight() * 0.35f);
+
+            juce::Graphics::ScopedSaveState ss (g);
+
+            juce::Path clip;
+            clip.addRoundedRectangle (b, corner);
+            g.reduceClipRegion (clip);
+
+            g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.45f),
+                                                     b.getCentreX(), b.getY(),
+                                                     juce::Colours::transparentBlack,
+                                                     b.getCentreX(), b.getY() + depth, false));
+            g.fillRect (b.withHeight (depth));
+        }
+
+        g.setColour (theme::glassEdge);
+        g.drawRoundedRectangle (b.reduced (0.5f), corner, 1.0f);
     }
 
     // =======================================================================

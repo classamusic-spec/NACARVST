@@ -2,6 +2,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <vector>
+
 #include "../Theme.h"
 #include "../Layout.h"
 #include "Icons.h"
@@ -10,6 +12,70 @@
 namespace nacar::ui
 {
     class ParamAttachment;
+
+    // =======================================================================
+    //  Motion - hover and press as quantities rather than as booleans
+    //
+    //  theme::raisedCeramic, raisedGlass and accentSurface take `press` and
+    //  `hover` in 0..1 because a control that snaps between two drawings is
+    //  seen, while one that travels is felt.  Most widgets in this file own no
+    //  clock, and giving fifty of them a juce::Timer each to move one value for
+    //  a fifth of a second would be absurd - so they share one ticker, which
+    //  runs only while something is actually in flight.
+    // =======================================================================
+    namespace detail
+    {
+        class Motion;
+
+        class MotionTicker : private juce::Timer
+        {
+        public:
+            MotionTicker() = default;
+            ~MotionTicker() override;
+
+            void add (Motion&);
+            void remove (Motion&);
+
+        private:
+            void timerCallback() override;
+
+            std::vector<Motion*> inFlight;
+        };
+
+        /** A 0..1 quantity that eases towards a target and repaints its owner
+            while it moves. */
+        class Motion
+        {
+        public:
+            /** `easing` is the fraction of the remaining distance covered per
+                tick: larger is snappier.  Presses want more than hovers. */
+            explicit Motion (juce::Component& ownerToRepaint, float easing = 0.30f)
+                : owner (ownerToRepaint), rate (easing) {}
+
+            ~Motion() { ticker->remove (*this); }
+
+            /** Eases towards `t` from here. */
+            void setTarget (float t);
+
+            /** Jumps without animating - for construction, and for state
+                restored from the host, which must not be seen to move. */
+            void snapTo (float t);
+
+            float get() const noexcept      { return current; }
+            operator float() const noexcept { return current; }
+
+        private:
+            friend class MotionTicker;
+
+            bool advance();
+
+            juce::SharedResourcePointer<MotionTicker> ticker;
+            juce::Component& owner;
+            float current = 0.0f, target = 0.0f, rate;
+
+            JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Motion)
+        };
+    }
 
     // =======================================================================
     //  ParamControl - the behaviour every parameter-bound widget shares
@@ -59,6 +125,11 @@ namespace nacar::ui
         bool  isHovered = false;
         bool  isDragging = false;
         float displayValue = 0.0f;      ///< smoothed 0..1, what paint() should use
+
+        /** The same two facts as isHovered / isDragging, as quantities: a knob
+            lifts into the light rather than switching into it. */
+        detail::Motion hoverMotion { *this, 0.26f };
+        detail::Motion pressMotion { *this, 0.50f };
 
         /** Refreshes the tooltip from the current value. */
         void refreshTooltip();
@@ -134,6 +205,9 @@ namespace nacar::ui
 
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
 
+    protected:
+        void buttonStateChanged() override;
+
     private:
         Style style;
         bool selected = false;
@@ -142,6 +216,10 @@ namespace nacar::ui
         float corner = layout::radiusPill;
         std::optional<icons::Icon> leadingIcon, trailingIcon;
         float iconRatio = 0.5f;
+
+        detail::Motion hoverAnim  { *this, 0.30f };
+        detail::Motion pressAnim  { *this, 0.55f };
+        detail::Motion selectAnim { *this, 0.34f };
     };
 
     /** A bare icon in a circular or square hit area. */
@@ -161,6 +239,9 @@ namespace nacar::ui
 
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
 
+    protected:
+        void buttonStateChanged() override;
+
     private:
         icons::Icon icon;
         Style style;
@@ -168,21 +249,51 @@ namespace nacar::ui
         float ratio = 0.46f;
         juce::Colour normalColour { theme::inkMuted };
         juce::Colour activeColour { theme::violet };
+
+        detail::Motion hoverAnim  { *this, 0.30f };
+        detail::Motion pressAnim  { *this, 0.55f };
+        detail::Motion activeAnim { *this, 0.30f };
     };
 
-    /** The mint power ring on every FX card and atmosphere module. */
+    /**
+        The power indicator on every FX card and every atmosphere module.
+
+        It is TWO objects, because it is mounted in two different materials and
+        a lamp set into ceramic does not look like a lamp set into glass:
+
+          glass    a dark lens recessed into the card, dead when off and lit
+                   from behind when on.  The FX rack.
+          ceramic  a raised ceramic disc with a violet power glyph, which is
+                   what UI spec section 8 specifies and what the reference
+                   shows.  The atmosphere modules.
+
+        The seat defaults from the tint, because today mint means the rack and
+        violet means the modules - but it is settable, so the day those two stop
+        coinciding this class does not have to be rewritten to notice.
+    */
     class PowerButton : public juce::Button
     {
     public:
         enum class Tint { mint, violet };
+        enum class Seat { glass, ceramic };
 
         explicit PowerButton (Tint = Tint::mint);
 
         void setTint (Tint t) { tint = t; repaint(); }
+        void setSeat (Seat s) { seat = s; repaint(); }
+
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+
+    protected:
+        void buttonStateChanged() override;
 
     private:
         Tint tint;
+        Seat seat;
+
+        detail::Motion hoverAnim { *this, 0.30f };
+        detail::Motion pressAnim { *this, 0.55f };
+        detail::Motion onAnim    { *this, 0.26f };   ///< the lamp coming up
     };
 
     // =======================================================================
@@ -222,6 +333,11 @@ namespace nacar::ui
         float textSize = 8.5f;
         float tracking = 0.14f;
 
+        /** 0..1 across the track: the raised segment travels to its new place
+            rather than teleporting, which is most of why the well reads as a
+            well and the segment as a thing inside it. */
+        detail::Motion selectPos { *this, 0.36f };
+
         const ParameterRegistry* boundParams = nullptr;
         PID boundPid = PID::count;
 
@@ -251,8 +367,9 @@ namespace nacar::ui
     private:
         Size size;
         bool state = false;
-        bool hovered = false;
-        float animated = 0.0f;
+
+        detail::Motion animated  { *this, 0.42f };   ///< thumb travel
+        detail::Motion hoverAnim { *this, 0.30f };
 
         const ParameterRegistry* boundParams = nullptr;
         PID boundPid = PID::count;
@@ -321,10 +438,16 @@ namespace nacar::ui
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
 
     private:
         void setFromMouse (const juce::MouseEvent&);
         float value = 0.5f;
+
+        detail::Motion hoverAnim { *this, 0.30f };
+        detail::Motion pressAnim { *this, 0.55f };
     };
 
     // =======================================================================

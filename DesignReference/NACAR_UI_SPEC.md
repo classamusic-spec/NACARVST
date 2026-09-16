@@ -194,7 +194,7 @@ violet ink. The other three are glass-raised with muted ink.
 | Control | Centre |
 |---|---|
 | Play (filled circle) | 386, 401 · r 22 |
-| Stop (filled circle) | 444, 401 · r 22 |
+| Stop (rounded square) | 444, 401 · r 22 |
 | Reset / return-to-zero | 505, 401 |
 | `0:34.2 / 2:13` | x 549, baseline 406 |
 | Loop | 717, 401 |
@@ -204,6 +204,13 @@ violet ink. The other three are glass-raised with muted ink.
 | `ZOOM` label | x 960, baseline 405 |
 | Zoom slider | 1003 → 1130, y 401 · handle at 1075 |
 | Zoom in | 1158, 401 |
+
+> **Correction.** This table said *Stop (filled circle)* until it was checked
+> against the approved image, where stop is a rounded square — which is also
+> why it reads as a sibling of the four square view-mode buttons above it
+> rather than a second play. Play is the only disc in the transport row. The
+> transcription was wrong, not the image; where the two disagree the image
+> wins, and this file is the thing that gets corrected.
 
 ---
 

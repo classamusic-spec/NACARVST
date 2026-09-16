@@ -834,7 +834,7 @@ namespace nacar::ui
             env[0].preview = previewRow.withTrimmedRight (6);
 
             in.removeFromTop (6);
-            knobGrid (in.removeFromTop (62), 4, envKnobR);
+            knobGrid (in.removeFromTop (62), 4, envKnobR, 4);
 
             placeKnob (*velocityKnob, velocityCell, envKnobR);
             skipKnobs (1);
@@ -846,7 +846,7 @@ namespace nacar::ui
 
             env[(size_t) i].preview = in.removeFromTop (62);
             in.removeFromTop (6);
-            knobGrid (in.removeFromTop (62), 4, envKnobR);
+            knobGrid (in.removeFromTop (62), 4, envKnobR, 4);
         }
 
         // -- Breath / Pulse -------------------------------------------------
@@ -862,7 +862,7 @@ namespace nacar::ui
                                    (int) breathLock->preferredWidth(), 20);
 
             in.removeFromTop (6);
-            knobGrid (in.removeFromTop (60), 4, breathKnobR);
+            knobGrid (in.removeFromTop (60), 4, breathKnobR, 4);
 
             in.removeFromTop (8);
             breathPreview = in.removeFromTop (70);
@@ -879,14 +879,14 @@ namespace nacar::ui
             pulseDivisionSeg->setBounds (segRow.removeFromLeft (324));
 
             in.removeFromTop (6);
-            knobGrid (in.removeFromTop (62), 4, pulseKnobR);
+            knobGrid (in.removeFromTop (62), 4, pulseKnobR, 4);
 
             in.removeFromTop (4);
             pulseDestCaption = in.removeFromTop (12);
             pulseDestRule    = in.removeFromTop (1);
             in.removeFromTop (3);
 
-            knobGrid (in.removeFromTop (58), 5, pulseDestR);
+            knobGrid (in.removeFromTop (58), 5, pulseDestR, 5);
         }
 
         // -- Matrix ---------------------------------------------------------

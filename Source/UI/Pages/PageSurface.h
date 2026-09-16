@@ -139,8 +139,11 @@ namespace nacar::ui
         /** Rewinds the knob cursor.  Call at the top of resized(). */
         void beginLayout() noexcept { gridCursor = 0; }
 
-        /** Lays the knobs added since the last grid call into a grid. */
-        void knobGrid (juce::Rectangle<int> area, int columns, float knobRadius);
+        /** Lays out the knobs added since the last grid call.  `count` limits
+            the run to the next `count` knobs; -1 takes every knob still
+            unplaced, which is what a page with a single grid wants. */
+        void knobGrid (juce::Rectangle<int> area, int columns, float knobRadius,
+                       int count = -1);
 
         /** Places one knob by hand, without touching the cursor. */
         static void placeKnob (NacarKnob&, juce::Rectangle<int> cell, float knobRadius);

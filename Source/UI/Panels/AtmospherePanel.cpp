@@ -116,7 +116,8 @@ namespace nacar::ui
     void AtmospherePanel::buildModule (Module& m)
     {
         const auto& enableDef = ParameterRegistry::definition (m.enable);
-        const auto enableTip = juce::String (enableDef.name) + "  -  " + juce::String (enableDef.tooltip);
+        // The same two-line shape ui::tooltipFor() gives every bound widget.
+        const auto enableTip = juce::String (enableDef.name) + "\n" + juce::String (enableDef.tooltip);
 
         // -- power ring ------------------------------------------------------
         // Violet here, not mint: the atmosphere rings are violet in the
@@ -137,8 +138,11 @@ namespace nacar::ui
         if (m.iconIsToggle)
         {
             m.toggle = std::make_unique<ToggleSwitch> (ToggleSwitch::Size::large);
+
+            // bindTo() is a full two-way binding and sets the widget's own
+            // tooltip, so the switch and the power ring agree through the
+            // parameter rather than through each other.
             m.toggle->bindTo (processor.getParameters(), m.enable);
-            m.toggle->setTooltip (enableTip);
             addAndMakeVisible (*m.toggle);
         }
 

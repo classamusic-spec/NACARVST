@@ -86,9 +86,19 @@ namespace nacar::ui
     static constexpr float listTop              = 344.0f;
     static constexpr float listWellInset        = 3.0f;
 
+    static constexpr float searchFontSize = 12.5f;
+
+    // -- the empty state -----------------------------------------------------
+    static constexpr float emptyTitleSize  = 13.0f;
+    static constexpr float emptyTitleTrack = 0.04f;
+    static constexpr float emptySubSize    = 9.5f;
+    static constexpr float emptySubTrack   = 0.02f;
+    static constexpr float emptyGap        = 8.0f;   ///< between the two lines
+
     // -- one results row -----------------------------------------------------
     static constexpr float listRowH     = 46.0f;
     static constexpr float rowPad       = 16.0f;
+    static constexpr float rowAccentW   = 2.0f;      ///< selected-row violet bar
     static constexpr float rowNameSize  = 12.5f;
     static constexpr float rowNameBase  = 21.0f;
     static constexpr float rowMetaSize  = 7.5f;
@@ -167,6 +177,10 @@ namespace nacar::ui
 
         for (auto* p : pills)
         {
+            // Height first: preferredWidth() scales a pill's icons by its height,
+            // and answers from a guessed proportion while it still has none.
+            p->setSize (1, juce::roundToInt (rowH));
+
             const float w = p->preferredWidth (pillPad);
             p->setBounds (juce::Rectangle<float> (x, 0.0f, w, rowH).toNearestInt());
             x += w + pillGap;
@@ -231,7 +245,7 @@ namespace nacar::ui
         //  in glass; nothing is overridden here.
         searchBox.setMultiLine (false);
         searchBox.setReturnKeyStartsNewLine (false);
-        searchBox.setFont (theme::medium (12.5f));
+        searchBox.setFont (theme::medium (searchFontSize));
         searchBox.setIndents (12, 6);
         searchBox.setTextToShowWhenEmpty ("Search presets", theme::glassInkFaint);
         searchBox.onTextChange = [this] { rebuildFilter(); };
@@ -380,12 +394,13 @@ namespace nacar::ui
         // the optical viewport, top and bottom flush with the panel it replaces -
         // as if it had been pulled straight out of the chassis.  Derived from the
         // regions, never typed in.
-        const float left      = leftPanel.getX();
-        const float top       = leftPanel.getY();
-        const float bottomY   = leftPanel.getBottom();
-        const float right     = viewport.getX() + viewport.getWidth() * drawerViewportFraction;
+        const float left    = layout::leftPanel.getX();
+        const float topY    = layout::leftPanel.getY();
+        const float bottomY = layout::leftPanel.getBottom();
+        const float right   = layout::viewport.getX()
+                              + layout::viewport.getWidth() * drawerViewportFraction;
 
-        return juce::Rectangle<float> (left, top, right - left, bottomY - top).toNearestInt();
+        return juce::Rectangle<float> (left, topY, right - left, bottomY - topY).toNearestInt();
     }
 
     juce::Rectangle<float> PresetBrowser::listArea (juce::Rectangle<float> drawerLocal) const
@@ -448,6 +463,8 @@ namespace nacar::ui
 
         for (auto* p : { &favouritesPill, &recentPill })
         {
+            p->setSize (1, juce::roundToInt (rowH));
+
             const float w = p->preferredWidth (pillPad);
             p->setBounds (juce::Rectangle<float> (x, collectionsRowY, w, rowH).toNearestInt());
             x += w + pillGap;
@@ -568,8 +585,7 @@ namespace nacar::ui
             g.fillRoundedRectangle (b.reduced (2.0f), radiusPill);
 
             g.setColour (theme::violet);
-            g.fillRoundedRectangle (juce::Rectangle<float> (b.getX() + 3.0f, b.getY() + 7.0f,
-                                                            2.0f, b.getHeight() - 14.0f), 1.0f);
+            g.fillRoundedRectangle (b.reduced (3.0f, 7.0f).withWidth (rowAccentW), 1.0f);
         }
 
         // The preset name is the one untracked run in the drawer, so it is drawn
@@ -706,23 +722,26 @@ namespace nacar::ui
             // panel with names that do not resolve to a file on disk.
             const float centreY = list.getCentreY();
 
+            // drawTracked places a run from the top of its em box, so these two
+            // are stacked either side of the well's centre line.
             {
-                const auto f = theme::medium (13.0f);
+                const auto f = theme::medium (emptyTitleSize);
 
                 g.setColour (theme::glassInkMuted);
                 theme::drawTracked (g, "No presets installed",
-                                    { list.getX(), centreY - f.getHeight() - 3.0f,
+                                    { list.getX(), centreY - f.getHeight() - emptyGap * 0.5f,
                                       list.getWidth(), f.getHeight() },
-                                    f, 0.04f, juce::Justification::centred);
+                                    f, emptyTitleTrack, juce::Justification::centred);
             }
 
             {
-                const auto f = theme::medium (9.5f);
+                const auto f = theme::medium (emptySubSize);
 
                 g.setColour (theme::glassInkFaint);
                 theme::drawTracked (g, "The factory library lands with the sound design phase.",
-                                    { list.getX(), centreY + 5.0f, list.getWidth(), f.getHeight() },
-                                    f, 0.02f, juce::Justification::centred);
+                                    { list.getX(), centreY + emptyGap * 0.5f,
+                                      list.getWidth(), f.getHeight() },
+                                    f, emptySubTrack, juce::Justification::centred);
             }
         }
     }

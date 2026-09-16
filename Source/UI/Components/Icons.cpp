@@ -450,8 +450,8 @@ namespace nacar::icons
                     // The button draws its own trailing chevron, so this is the
                     // waveform only - and it is inset a little, because the
                     // chevron will sit immediately to its right.
-                    addWaveformBars (p, { 0.34f, 0.70f, 0.95f, 0.55f, 0.88f, 0.62f, 0.38f },
-                                     14.0f, 86.0f, 50.0f, 38.0f, 9.0f);
+                    addWaveformBars (p, { 0.36f, 0.74f, 1.0f, 0.58f, 0.88f, 0.44f },
+                                     12.0f, 88.0f, 50.0f, 38.0f, 8.0f);
                     break;
 
                 case Icon::arrowRight:
@@ -463,16 +463,16 @@ namespace nacar::icons
 
                 case Icon::cassette:
                     p.addRoundedRectangle (8.0f, 22.0f, 84.0f, 56.0f, 10.0f);
-                    p.addRoundedRectangle (20.0f, 36.0f, 60.0f, 28.0f, 6.0f);
-                    addDot (p, 36.0f, 50.0f, 7.5f);
-                    addDot (p, 64.0f, 50.0f, 7.5f);
+                    p.addRoundedRectangle (20.0f, 34.0f, 60.0f, 32.0f, 6.0f);
+                    addDot (p, 36.0f, 50.0f, 6.0f);
+                    addDot (p, 64.0f, 50.0f, 6.0f);
                     break;
 
                 case Icon::dotMatrix:
                     for (int row = 0; row < 4; ++row)
                         for (int col = 0; col < 4; ++col)
                             addDot (p, 20.0f + 20.0f * (float) col,
-                                       20.0f + 20.0f * (float) row, 6.0f);
+                                       20.0f + 20.0f * (float) row, 5.5f);
                     break;
 
                 case Icon::filterCurve:
@@ -571,9 +571,9 @@ namespace nacar::icons
                 case Icon::wave3:
                     // Amplitude decays downwards, so the stack is nudged down a
                     // couple of units to put the ink back on centre.
-                    addWavyLine (p, 10.0f, 90.0f, 28.0f, 10.0f, 4);
-                    addWavyLine (p, 10.0f, 90.0f, 52.0f, 7.0f, 4);
-                    addWavyLine (p, 10.0f, 90.0f, 76.0f, 4.5f, 4);
+                    addWavyLine (p, 10.0f, 90.0f, 28.0f, 8.0f, 4);
+                    addWavyLine (p, 10.0f, 90.0f, 52.0f, 5.5f, 4);
+                    addWavyLine (p, 10.0f, 90.0f, 76.0f, 3.5f, 4);
                     break;
 
                 case Icon::triangle:
@@ -592,15 +592,16 @@ namespace nacar::icons
                 case Icon::srcSample:
                     // Denser and thinner than waveformMode: this is sampled
                     // material, not a display mode.
-                    addWaveformBars (p, { 0.32f, 0.68f, 0.95f, 0.52f, 1.0f,
-                                          0.74f, 0.86f, 0.46f, 0.30f },
-                                     9.0f, 91.0f, 50.0f, 38.0f, 6.0f);
+                    addWaveformBars (p, { 0.30f, 0.66f, 1.0f, 0.44f, 0.92f, 0.58f, 0.34f },
+                                     9.0f, 91.0f, 50.0f, 38.0f, 5.0f);
                     break;
 
                 case Icon::srcGrain:
-                    for (int i = 0; i < 12; ++i)
+                    // Ten grains, not twelve: any closer and the ring fuses
+                    // into a cog at the size the source pills draw it.
+                    for (int i = 0; i < 10; ++i)
                     {
-                        const float a = twoPi * (float) i / 12.0f;
+                        const float a = twoPi * (float) i / 10.0f;
 
                         addDot (p, 50.0f + 34.0f * std::sin (a),
                                    50.0f - 34.0f * std::cos (a), 6.0f);
@@ -623,9 +624,8 @@ namespace nacar::icons
                     addPolyline (p, { { 50.0f, 14.0f }, { 86.0f, 82.0f }, { 14.0f, 82.0f } });
                     p.closeSubPath();
 
-                    addLine (p, 35.0f, 46.0f, 65.0f, 46.0f);
-                    addLine (p, 28.0f, 60.0f, 72.0f, 60.0f);
-                    addLine (p, 21.0f, 74.0f, 79.0f, 74.0f);
+                    addLine (p, 32.0f, 52.0f, 68.0f, 52.0f);
+                    addLine (p, 23.0f, 70.0f, 77.0f, 70.0f);
                     break;
 
                 // -- bottom navigation --------------------------------------
@@ -715,11 +715,11 @@ namespace nacar::icons
 
                 case Icon::dice:
                     p.addRoundedRectangle (14.0f, 14.0f, 72.0f, 72.0f, 16.0f);
-                    addDot (p, 32.0f, 32.0f, 5.0f);
-                    addDot (p, 68.0f, 32.0f, 5.0f);
-                    addDot (p, 50.0f, 50.0f, 5.0f);
-                    addDot (p, 32.0f, 68.0f, 5.0f);
-                    addDot (p, 68.0f, 68.0f, 5.0f);
+                    addDot (p, 32.0f, 32.0f, 4.0f);
+                    addDot (p, 68.0f, 32.0f, 4.0f);
+                    addDot (p, 50.0f, 50.0f, 4.0f);
+                    addDot (p, 32.0f, 68.0f, 4.0f);
+                    addDot (p, 68.0f, 68.0f, 4.0f);
                     break;
 
                 case Icon::lock:

@@ -297,9 +297,11 @@ namespace nacar::ui
     // -----------------------------------------------------------------------
     //  Layout
     // -----------------------------------------------------------------------
-    void PageSurface::knobGrid (juce::Rectangle<int> area, int columns, float knobRadius)
+    void PageSurface::knobGrid (juce::Rectangle<int> area, int columns, float knobRadius,
+                                int count)
     {
-        const int remaining = knobs.size() - gridCursor;
+        const int available = knobs.size() - gridCursor;
+        const int remaining = count < 0 ? available : juce::jmin (count, available);
 
         if (remaining <= 0 || columns <= 0 || area.isEmpty())
             return;
@@ -325,7 +327,7 @@ namespace nacar::ui
             placeKnob (*knobs[gridCursor + i], cell, knobRadius);
         }
 
-        gridCursor = knobs.size();
+        gridCursor += remaining;
     }
 
     void PageSurface::placeKnob (NacarKnob& k, juce::Rectangle<int> cell, float knobRadius)

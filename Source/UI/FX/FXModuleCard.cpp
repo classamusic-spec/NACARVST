@@ -35,7 +35,8 @@ namespace nacar::ui
         const auto& def = ParameterRegistry::definition (slot.enable);
 
         power.setClickingTogglesState (true);
-        power.setTooltip (juce::String (def.name) + "  -  " + juce::String (def.tooltip));
+        // The same two-line shape ui::tooltipFor() gives every bound widget.
+        power.setTooltip (juce::String (def.name) + "\n" + juce::String (def.tooltip));
         power.onStateChange = [this] { powerStateChanged(); };
         addAndMakeVisible (power);
 

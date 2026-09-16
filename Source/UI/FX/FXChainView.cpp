@@ -93,6 +93,7 @@ namespace nacar::ui
         collapseButton.setColours (theme::glassInkMuted, theme::violet);
         collapseButton.setTooltip ("Collapse the chain");
         collapseButton.setIcon (collapsed ? icons::Icon::expand : icons::Icon::collapse);
+        collapseButton.setActive (collapsed);
         collapseButton.onClick = [this] { setCollapsed (! collapsed); };
         addAndMakeVisible (collapseButton);
 
@@ -288,6 +289,7 @@ namespace nacar::ui
         }
 
         collapseButton.setIcon (collapsed ? icons::Icon::expand : icons::Icon::collapse);
+        collapseButton.setActive (collapsed);
         collapseButton.setTooltip (collapsed ? "Expand the chain" : "Collapse the chain");
         addSlotButton.setVisible (! collapsed);
 
@@ -615,11 +617,13 @@ namespace nacar::ui
                 const auto slotRect = fxCard (i);
                 const auto& card = *cards[(size_t) i];
 
+                // ui::glassLabel treats the origin as the centre when the
+                // justification is centred, so the card's centre goes in.
                 glassLabel (g, card.getSlotName(),
-                            { slotRect.getX(), fx::linkY + fx::nameSize * 0.5f },
+                            { slotRect.getCentreX(), fx::linkY + fx::nameSize * 0.5f },
                             fx::nameSize, fx::nameTrack,
                             card.getSelected() ? theme::violet : theme::glassInkMuted,
-                            juce::Justification::centred, fx::cardW);
+                            juce::Justification::centred);
             }
         }
 

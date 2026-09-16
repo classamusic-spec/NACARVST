@@ -139,3 +139,11 @@ option(NACAR_BUILD_TESTS "Build the NACAR test runner" ON)
 if (NACAR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/CMakeLists.txt")
     add_subdirectory(Tests)
 endif()
+
+# ---------------------------------------------------------------------------
+#  Offline tools (benchmark renderer, auditioning)
+# ---------------------------------------------------------------------------
+option(NACAR_BUILD_TOOLS "Build the NACAR offline tools" ON)
+if (NACAR_BUILD_TOOLS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tools/CMakeLists.txt")
+    add_subdirectory(Tools)
+endif()

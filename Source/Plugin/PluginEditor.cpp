@@ -125,21 +125,129 @@ namespace nacar
         presetBrowser->setBounds (getLocalBounds());
     }
 
-    void NacarCanvas::refreshPage (ui::Page page)
+    void NacarCanvas::applyPageAlpha (ui::Page page, float alpha, bool visible)
     {
         if (opticalViewport == nullptr)
             return;
 
-        const bool isMain = (page == ui::Page::main);
+        alpha = juce::jlimit (0.0f, 1.0f, alpha);
 
-        opticalViewport->setVisible (isMain);
-        mutationPanel  ->setVisible (isMain);
-        fxChainView    ->setVisible (isMain);
+        auto set = [alpha, visible] (juce::Component* c)
+        {
+            if (c == nullptr)
+                return;
 
-        modPage->setVisible (page == ui::Page::mod);
-        fxPage ->setVisible (page == ui::Page::fx);
-        seqPage->setVisible (page == ui::Page::seq);
-        mixPage->setVisible (page == ui::Page::mix);
+            c->setAlpha (alpha);
+            c->setVisible (visible);
+        };
+
+        switch (page)
+        {
+            case ui::Page::main:
+                // MAIN is three components rather than one, because the centre
+                // column of the reference is three separate panels.
+                set (opticalViewport.get());
+                set (mutationPanel.get());
+                set (fxChainView.get());
+                break;
+
+            case ui::Page::mod: set (modPage.get()); break;
+            case ui::Page::fx:  set (fxPage.get());  break;
+            case ui::Page::seq: set (seqPage.get()); break;
+            case ui::Page::mix: set (mixPage.get()); break;
+
+            default: break;
+        }
+    }
+
+    float NacarCanvas::pageAlpha (ui::Page page) const
+    {
+        // MAIN is three components that always share an alpha, so the viewport
+        // speaks for all three.
+        const juce::Component* c = nullptr;
+
+        switch (page)
+        {
+            case ui::Page::main: c = opticalViewport.get(); break;
+            case ui::Page::mod:  c = modPage.get();         break;
+            case ui::Page::fx:   c = fxPage.get();          break;
+            case ui::Page::seq:  c = seqPage.get();         break;
+            case ui::Page::mix:  c = mixPage.get();         break;
+            default: break;
+        }
+
+        return c != nullptr ? c->getAlpha() : 1.0f;
+    }
+
+    void NacarCanvas::refreshPage (ui::Page page, bool animate)
+    {
+        if (opticalViewport == nullptr)
+            return;
+
+        // Asked for the page that is already fading in: let it finish.
+        // Restarting the fade from zero here would flicker, and this happens
+        // easily - a double click on a nav item is two calls, not one.
+        if (page == activePage && fadeT < 1.0f)
+            return;
+
+        if (page == activePage || ! animate)
+        {
+            activePage = page;
+            fadeT      = 1.0f;
+
+            // Idempotent: the constructor and the state restore both call this
+            // with the page already set, and neither should start an animation.
+            applyPageAlpha (activePage, 1.0f, true);
+
+            for (auto p : { ui::Page::main, ui::Page::mod, ui::Page::fx,
+                            ui::Page::seq, ui::Page::mix })
+                if (p != activePage)
+                    applyPageAlpha (p, 1.0f, false);
+
+            return;
+        }
+
+        // Interrupting a fade: whatever was coming in becomes what is going
+        // out, at whatever alpha it had actually reached.  Snapping to the
+        // previous page instead would make a fast double-switch flash.
+        outgoingFrom = pageAlpha (activePage);
+        outgoingPage = activePage;
+        activePage   = page;
+        fadeT        = 0.0f;
+
+        applyPageAlpha (activePage, 0.0f, true);
+
+        tickTransition();
+    }
+
+    void NacarCanvas::tickTransition()
+    {
+        if (fadeT >= 1.0f)
+            return;
+
+        // 140 ms at the editor's 30 Hz tick.
+        fadeT = juce::jmin (1.0f, fadeT + 1.0f / 4.2f);
+
+        // Smoothstep, so the fade has no corners at either end.  A linear
+        // cross-fade reads as a cut with a delay in it.
+        const float t = fadeT * fadeT * (3.0f - 2.0f * fadeT);
+
+        applyPageAlpha (activePage, t, true);
+
+        if (outgoingPage != activePage)
+            applyPageAlpha (outgoingPage, outgoingFrom * (1.0f - t), fadeT < 1.0f);
+
+        if (fadeT >= 1.0f)
+        {
+            // Land exactly, and leave every hidden page at full alpha so that
+            // the next fade starts from a known state.
+            applyPageAlpha (activePage, 1.0f, true);
+
+            for (auto p : { ui::Page::main, ui::Page::mod, ui::Page::fx,
+                            ui::Page::seq, ui::Page::mix })
+                if (p != activePage)
+                    applyPageAlpha (p, 1.0f, false);
+        }
     }
 
     // =======================================================================
@@ -158,7 +266,9 @@ namespace nacar
         uiScale = juce::jlimit (scaleMin, scaleMax, (float) (double) ed.getProperty (ids::editorScale, 1.0));
         page    = (ui::Page) juce::jlimit (0, 4, (int) ed.getProperty (ids::activePage, 0));
 
-        canvas->refreshPage (page);
+        // Not animated: this is the page the editor was closed on, and fading
+        // into it from MAIN would show the user a page they never chose.
+        canvas->refreshPage (page, false);
 
         setResizable (true, true);
 
@@ -220,6 +330,10 @@ namespace nacar
     {
         if (canvas == nullptr)
             return;
+
+        // The page cross-fade, before anything repaints, so a frame never
+        // shows the alpha from the frame before it.
+        canvas->tickTransition();
 
         // The meter and the waveform playhead move every frame.
         canvas->bottom().repaint();

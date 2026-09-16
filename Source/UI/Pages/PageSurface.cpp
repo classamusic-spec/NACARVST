@@ -124,15 +124,14 @@ namespace nacar::ui
     {
         const auto b = getLocalBounds().toFloat().reduced (2.0f);
 
+        // The page plate is the outermost object on the canvas, so it is the
+        // one thing that genuinely floats; everything else is measured against
+        // it.  A glass page is the opposite - a hole cut through the chassis -
+        // and so gets a well rather than a plate.
         if (material == Material::ceramic)
-        {
-            theme::contactShadow (g, b, layout::radiusPanel);
-            theme::ceramicSurface (g, b, layout::radiusPanel);
-        }
+            theme::raisedCeramic (g, b, layout::radiusPanel, theme::Elevation::raised);
         else
-        {
-            theme::glassSurface (g, b, layout::radiusPanel, theme::glassDeep);
-        }
+            theme::recessedWell (g, b, layout::radiusPanel, theme::glassDeep, 1.2f);
 
         // -- title block ----------------------------------------------------
         // Violet accent bar, the same device the optical viewport uses to mark
@@ -163,15 +162,14 @@ namespace nacar::ui
         if (r.isEmpty())
             return;
 
+        // A section card sits ON a ceramic page and IN a glass one - on glass
+        // the page is already a well, so a card that were also a well would
+        // have nothing to be recessed from.
         if (material == Material::ceramic)
-        {
-            theme::contactShadow (g, r, layout::radiusCard, 2.0f, 7.0f, 0.16f);
-            theme::ceramicSurface (g, r, layout::radiusCard, theme::ceramicLight, theme::ceramicMid);
-        }
+            theme::raisedCeramic (g, r, layout::radiusCard, theme::Elevation::resting);
         else
-        {
-            theme::glassSurface (g, r, layout::radiusCard, theme::glassMid);
-        }
+            theme::raisedGlass (g, r, layout::radiusCard, theme::Elevation::resting,
+                                0.0f, 0.0f, theme::glassMid);
 
         float textX = r.getX() + page::sectionPad;
 
@@ -427,7 +425,9 @@ namespace nacar::ui
     // -----------------------------------------------------------------------
     void previewWell (juce::Graphics& g, juce::Rectangle<float> r)
     {
-        theme::glassSurface (g, r, 5.0f, theme::glassDeep);
+        // Its name was already the right one; now it draws it.  An LFO preview
+        // is a window cut into the card, not a dark patch painted on it.
+        theme::recessedWell (g, r, 5.0f, theme::glassDeep, 1.0f);
     }
 
     void violetTrace (juce::Graphics& g, const juce::Path& fill, const juce::Path& line)
@@ -435,7 +435,18 @@ namespace nacar::ui
         g.setColour (theme::violet.withAlpha (0.12f));
         g.fillPath (fill);
 
-        g.setColour (theme::violet);
+        // Three passes, widest and faintest first: the trace has to EMIT, not
+        // merely be violet.  Violet is one of the two things in the instrument
+        // allowed to be a light source, and a 1 px stroke is not one.
+        g.setColour (theme::violet.withAlpha (0.16f));
+        g.strokePath (line, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+
+        g.setColour (theme::violet.withAlpha (0.30f));
+        g.strokePath (line, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+
+        g.setColour (theme::violetLight);
         g.strokePath (line, juce::PathStrokeType (1.0f));
     }
 

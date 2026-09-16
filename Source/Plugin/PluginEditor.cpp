@@ -399,9 +399,12 @@ namespace nacar
 
     void NacarEditor::selectRelativePreset (int delta)
     {
-        juce::ignoreUnused (delta);
-        // Wired to PresetManager once the factory library lands.  Until then
-        // this is deliberately inert rather than faking a preset change.
+        // The factory library has landed, so these are no longer inert.  The
+        // browser owns the library and the load path; this is the one line that
+        // reaches it, and leaving it unwritten would have left two arrows in the
+        // header that look like controls and are not.
+        if (canvas != nullptr)
+            canvas->browser().stepPreset (delta);
     }
 
     void NacarEditor::chassisChanged()

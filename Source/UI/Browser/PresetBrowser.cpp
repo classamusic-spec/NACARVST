@@ -3,36 +3,43 @@
 #include <algorithm>
 
 // ===========================================================================
-//  WHAT IS REAL IN THIS FILE, AND WHAT IS WAITING
+//  WHAT IS REAL IN THIS FILE
 //
-//  Real, now:
 //    - the drawer itself: slide animation, scrim, open/close, and the promise
 //      that a closed browser is invisible AND transparent to the mouse, so the
 //      instrument stays playable underneath it;
 //    - the search box, including the escape-closes handler and the fact that it
-//      is the only thing in here that ever takes keyboard focus;
+//      is the only thing in here that ever GRABS keyboard focus - the results
+//      list takes it when a row is clicked, which is what makes the arrow keys
+//      and return work, but nothing hands it focus behind the user's back;
 //    - the CATEGORY and MOOD filter rows, built from the master spec's
 //      vocabularies, single-select, click-again-to-clear, horizontally
 //      scrolling;
-//    - the FAVOURITES and RECENT collection toggles;
+//    - the FAVOURITES and RECENT collection toggles, both backed by state that
+//      PresetManager persists to disk;
 //    - the filter pipeline: query + category + mood + favourites + recent are
 //      applied to `library` and produce `filtered`, and RECENT also orders by
 //      last-used;
-//    - the results list: a real juce::ListBox over a real model, with row
-//      painting, selection, and a favourite toggle on the row's heart;
-//    - the empty state.
+//    - the results list over the real library: the factory set plus every user
+//      preset found on disk.  A click loads; so does return; so does a double
+//      click, which also closes the drawer behind it.
 //
-//  Waiting on Phase 27 (Source/PresetSystem/ does not exist yet):
-//    - PresetManager, which is what will fill `library`.  Until it does, the
-//      array is empty on purpose and the browser says so.  No placeholder
-//      presets are invented here - a name in this list has to resolve to a file.
-//    - loading a preset on double-click (see listBoxItemDoubleClicked).
-//    - persisting a favourite (see listBoxItemClicked): the flag belongs in the
-//      preset file and in StateManager's ids::presetFavourite, and currently
-//      lives only in memory.
+//  WHAT THE BROWSER DELIBERATELY DOES NOT OWN
+//
+//  None of the preset state.  `library` is a mirror of `PresetManager::all()`
+//  and is rebuilt from it after anything that could change it, so there is one
+//  answer to "is this a favourite" and it is not in this file.  Applying a
+//  preset is PresetManager's job too - it goes through the host gesture
+//  protocol so the DAW sees the change - and the browser only says which one.
+//
+//  STILL MISSING
 //    - TAGS as a filter row of its own.  PresetEntry carries the tags and the
-//      search box already matches against them, but the tag vocabulary is
-//      library-derived, so there is nothing to build chips from yet.
+//      search box already matches against them, but a tag row would need a
+//      vocabulary derived from the library and a second selection model, and
+//      the drawer has no vertical room for a third chip row at this size.
+//    - the header bar's preset arrows.  `stepPreset` is here and works;
+//      `NacarEditor::selectRelativePreset` in PluginEditor.cpp is what has to
+//      call it, and that file is outside this change.
 // ===========================================================================
 
 namespace nacar::ui
@@ -220,10 +227,9 @@ namespace nacar::ui
     //  PresetBrowser
     // =======================================================================
     PresetBrowser::PresetBrowser (NacarProcessor& p, EditorHost& h)
-        : processor (p), host (h)
+        : processor (p), host (h),
+          presetManager (p.getParameters(), p.getStateManager())
     {
-        juce::ignoreUnused (processor);
-
         // Closed is the default, and closed means *gone*: invisible, and
         // transparent to the mouse so it can never stand between the player and
         // the instrument.
@@ -268,11 +274,13 @@ namespace nacar::ui
 
         favouritesPill.setIcon (icons::Icon::heart);
 
-        for (auto* p : { &favouritesPill, &recentPill })
+        // Named `pill` rather than `p`, which is the constructor's own
+        // processor parameter: -Wshadow is on for this build.
+        for (auto* pill : { &favouritesPill, &recentPill })
         {
-            p->setTextSize (filterPillSize, filterPillTrack);
-            p->setCornerRadius (radiusPill);
-            drawer->addAndMakeVisible (p);
+            pill->setTextSize (filterPillSize, filterPillTrack);
+            pill->setCornerRadius (radiusPill);
+            drawer->addAndMakeVisible (pill);
         }
 
         favouritesPill.onClick = [this]
@@ -302,7 +310,7 @@ namespace nacar::ui
         drawer->addAndMakeVisible (resultsList);
 
         refreshFilterPills();
-        rebuildFilter();
+        syncLibrary();
     }
 
     PresetBrowser::~PresetBrowser()
@@ -347,7 +355,13 @@ namespace nacar::ui
             setVisible (true);
             setInterceptsMouseClicks (true, true);
             toFront (false);        // false: coming forward must not steal focus
-            rebuildFilter();
+
+            // Re-read rather than trust the last mirror: a user preset may have
+            // been saved, renamed or deleted on disk since the drawer last
+            // closed, and the browser is the thing that would show a stale one.
+            presetManager.refresh();
+            syncLibrary();
+            showCurrentPreset();
         }
 
         startTimerHz (animationHz);
@@ -563,6 +577,84 @@ namespace nacar::ui
     }
 
     // -----------------------------------------------------------------------
+    //  The library
+    // -----------------------------------------------------------------------
+    void PresetBrowser::syncLibrary()
+    {
+        library.clearQuick();
+
+        for (const auto& info : presetManager.all())
+        {
+            PresetEntry e;
+            e.name      = info.name;
+            e.author    = info.author;
+            e.category  = info.category;
+            e.mood      = info.mood;
+            e.tags      = info.tags;
+            e.favourite = info.favourite;
+            e.lastUsed  = info.lastUsed;
+            e.file      = info.file;
+
+            library.add (e);
+        }
+
+        rebuildFilter();
+    }
+
+    bool PresetBrowser::loadPreset (int index)
+    {
+        if (! juce::isPositiveAndBelow (index, library.size()))
+            return false;
+
+        if (! presetManager.apply (index))
+            return false;
+
+        // apply() stamps lastUsed, which RECENT sorts on, so the mirror has to
+        // be refreshed rather than patched in place.
+        const auto selectedName = library.getReference (index).name;
+
+        syncLibrary();
+        host.chassisChanged();
+
+        for (int row = 0; row < filtered.size(); ++row)
+            if (library.getReference (filtered[row]).name == selectedName)
+            {
+                resultsList.selectRow (row, true, true);
+                break;
+            }
+
+        return true;
+    }
+
+    bool PresetBrowser::stepPreset (int delta)
+    {
+        if (! presetManager.step (delta))
+            return false;
+
+        syncLibrary();
+        showCurrentPreset();
+        host.chassisChanged();
+
+        return true;
+    }
+
+    void PresetBrowser::showCurrentPreset()
+    {
+        const int current = presetManager.currentIndex();
+
+        if (current < 0)
+            return;
+
+        for (int row = 0; row < filtered.size(); ++row)
+            if (filtered[row] == current)
+            {
+                resultsList.selectRow (row, true, true);
+                resultsList.scrollToEnsureRowIsOnscreen (row);
+                return;
+            }
+    }
+
+    // -----------------------------------------------------------------------
     //  juce::ListBoxModel
     // -----------------------------------------------------------------------
     int PresetBrowser::getNumRows()
@@ -628,29 +720,60 @@ namespace nacar::ui
         const int rowWidth = (e.eventComponent != nullptr ? e.eventComponent->getWidth()
                                                           : resultsList.getWidth());
 
+        const int index = filtered[row];
+
+        // The heart is a control, not part of the row: hitting it toggles the
+        // favourite and must not also load the preset, or marking something to
+        // come back to would take you away from what you are playing.
         if ((float) e.x >= (float) rowWidth - rowPad - rowHeartSize * 2.0f)
         {
-            auto& entry = library.getReference (filtered[row]);
-            entry.favourite = ! entry.favourite;
+            const bool wanted = ! library.getReference (index).favourite;
 
-            // MISSING: persistence.  The flag belongs in the preset file and in
-            // StateManager's ids::presetFavourite; PresetManager writes both.
-            // Until Phase 27 it lives only in this array.
+            presetManager.setFavourite (index, wanted);
+            library.getReference (index).favourite = wanted;
+
             if (favouritesOnly)
                 rebuildFilter();
             else
                 resultsList.repaintRow (row);
+
+            // The ListBox selected the row on the way in, which would leave the
+            // violet accent bar pointing at a preset that is not the one
+            // playing.  Put the marker back on whatever is actually loaded.
+            showCurrentPreset();
+
+            return;
         }
+
+        // Anywhere else on the row loads it, and the drawer stays open: the
+        // instrument is playable while browsing, so the point of a single
+        // click is to hear the next preset without leaving the list.
+        loadPreset (index);
     }
 
-    void PresetBrowser::listBoxItemDoubleClicked (int row, const juce::MouseEvent&)
+    void PresetBrowser::listBoxItemDoubleClicked (int row, const juce::MouseEvent& e)
     {
-        juce::ignoreUnused (row);
+        if (! juce::isPositiveAndBelow (row, filtered.size()))
+            return;
 
-        // MISSING: loading.  This would hand library[filtered[row]].file to
-        // PresetManager::load() and then close the drawer.  PresetManager does
-        // not exist yet (Phase 27), so this is deliberately inert rather than
-        // pretending a preset was loaded.
+        const int rowWidth = (e.eventComponent != nullptr ? e.eventComponent->getWidth()
+                                                          : resultsList.getWidth());
+
+        if ((float) e.x >= (float) rowWidth - rowPad - rowHeartSize * 2.0f)
+            return;                     // the heart already answered the first click
+
+        // The single click has already loaded it.  The second one says "that
+        // is the one" and puts the drawer away.
+        host.setBrowserOpen (false);
+    }
+
+    void PresetBrowser::returnKeyPressed (int row)
+    {
+        if (! juce::isPositiveAndBelow (row, filtered.size()))
+            return;
+
+        if (loadPreset (filtered[row]))
+            host.setBrowserOpen (false);
     }
 
     // -----------------------------------------------------------------------
@@ -706,7 +829,7 @@ namespace nacar::ui
         glassLabel (g, "COLLECTIONS", { pad, collectionsLabelBase }, filterLabelSize, filterLabelTrack);
         glassLabel (g, "RESULTS",     { pad, resultsLabelBase },     filterLabelSize, filterLabelTrack);
 
-        // The count is whatever actually survived the filter - right now, zero.
+        // The count is whatever actually survived the filter.
         glassLabel (g, juce::String (filtered.size())
                            + (filtered.size() == 1 ? " PRESET" : " PRESETS"),
                     { b.getRight() - pad, resultsLabelBase },
@@ -718,8 +841,20 @@ namespace nacar::ui
 
         if (filtered.isEmpty())
         {
-            // There is no factory library yet.  Say so, rather than dressing the
-            // panel with names that do not resolve to a file on disk.
+            // Two different empty states, because they mean different things:
+            // a filter that matched nothing is the user's own doing and is
+            // fixed by clearing it, while an empty library is a broken install.
+            const bool libraryIsEmpty = library.isEmpty();
+
+            const juce::String title = libraryIsEmpty ? "No presets installed"
+                                                      : "Nothing matches";
+
+            const juce::String subtitle =
+                libraryIsEmpty
+                    ? juce::String ("The factory library could not be read.")
+                    : juce::String ("Clear the search or the filters above to see the other ")
+                          + juce::String (library.size()) + " presets.";
+
             const float centreY = list.getCentreY();
 
             // drawTracked places a run from the top of its em box, so these two
@@ -728,7 +863,7 @@ namespace nacar::ui
                 const auto f = theme::medium (emptyTitleSize);
 
                 g.setColour (theme::glassInkMuted);
-                theme::drawTracked (g, "No presets installed",
+                theme::drawTracked (g, title,
                                     { list.getX(), centreY - f.getHeight() - emptyGap * 0.5f,
                                       list.getWidth(), f.getHeight() },
                                     f, emptyTitleTrack, juce::Justification::centred);
@@ -738,7 +873,7 @@ namespace nacar::ui
                 const auto f = theme::medium (emptySubSize);
 
                 g.setColour (theme::glassInkFaint);
-                theme::drawTracked (g, "The factory library lands with the sound design phase.",
+                theme::drawTracked (g, subtitle,
                                     { list.getX(), centreY + emptyGap * 0.5f,
                                       list.getWidth(), f.getHeight() },
                                     f, emptySubTrack, juce::Justification::centred);

@@ -8,6 +8,7 @@
 #include "../Components/Widgets.h"
 #include "../Components/Icons.h"
 #include "../../Plugin/PluginProcessor.h"
+#include "../../Presets/PresetManager.h"
 
 namespace nacar::ui
 {
@@ -49,9 +50,10 @@ namespace nacar::ui
         stand between the player and the instrument.  Nothing in here grabs
         keyboard focus except the search box.
 
-        There is no factory library yet (Phase 27), so the list is genuinely
-        empty and says so.  See the comment block at the top of the .cpp for
-        exactly what is wired and what is waiting.
+        The library comes from `PresetManager`: the compiled-in factory set
+        plus whatever user presets are on disk.  The browser reads that array
+        and never invents a row, so a name in this list always resolves to
+        something that can actually be loaded.
     */
     class PresetBrowser : public juce::Component,
                           private juce::ListBoxModel,
@@ -65,6 +67,14 @@ namespace nacar::ui
         void setOpen (bool);
 
         bool isOpen() const noexcept { return open; }
+
+        /** Loads the next or previous preset in the library, wrapping.  This
+            is what the header bar's preset arrows want; `EditorHost::
+            selectRelativePreset` is the one line away from reaching it. */
+        bool stepPreset (int delta);
+
+        /** The library, in case something outside wants to count it. */
+        int getNumPresets() const noexcept { return library.size(); }
 
         void paint (juce::Graphics&) override;
         void resized() override;
@@ -83,6 +93,7 @@ namespace nacar::ui
                                bool rowIsSelected) override;
         void listBoxItemClicked (int row, const juce::MouseEvent&) override;
         void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
+        void returnKeyPressed (int row) override;
 
         // -- geometry -------------------------------------------------------
         juce::Rectangle<int>   drawerRestBounds() const;
@@ -96,10 +107,26 @@ namespace nacar::ui
         void setCategoryFilter (const juce::String&);
         void setMoodFilter (const juce::String&);
 
+        /** Copies PresetManager's array into `library` and re-applies the
+            filter.  The browser owns no preset state of its own. */
+        void syncLibrary();
+
+        /** Applies library[index] and leaves the row selected.  Returns false
+            if the preset could not be loaded, in which case nothing changed. */
+        bool loadPreset (int index);
+
+        /** Scrolls to and selects whatever is currently loaded, if it survived
+            the filter. */
+        void showCurrentPreset();
+
         void paintDrawer (juce::Graphics&, juce::Rectangle<float> drawerLocal) const;
 
         NacarProcessor& processor;
         EditorHost& host;
+
+        /** The library, and the only thing that may change it.  Declared
+            before the widgets so it outlives every callback that reaches it. */
+        PresetManager presetManager;
 
         juce::TextEditor searchBox;
         IconButton closeButton { icons::Icon::cross, IconButton::Style::plain };
@@ -113,8 +140,8 @@ namespace nacar::ui
 
         juce::ListBox resultsList { "presets", nullptr };
 
-        /** The library.  Empty until PresetSystem/PresetManager exists - the
-            browser reads it, never invents it. */
+        /** The library, mirrored out of PresetManager.  Index i here is index
+            i there, which is what makes a row clickable. */
         juce::Array<PresetEntry> library;
 
         /** Indices into `library` that survive the current filter. */

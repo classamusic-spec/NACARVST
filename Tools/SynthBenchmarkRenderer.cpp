@@ -15,7 +15,7 @@
 
     Usage:
         NacarBench [--out <dir>] [--rate <hz>] [--no-wav] [--chain]
-                   [--cpu] [--attribute] [<patch-name-filter>]
+                   [--cpu] [--attribute] [--presets] [<name-filter>]
 
         --chain      renders through the whole NACAR chain rather than the
                      synth alone.
@@ -23,6 +23,12 @@
                      time, and reports what each stage did to the stereo image.
                      Use it when a mono retention figure fails: the table names
                      the stage instead of leaving it to inference.
+        --presets    renders every FACTORY PRESET through the whole instrument
+                     - parameters, chain order and modulation matrix - and
+                     measures the library rather than the engine.  This is the
+                     gate for Source/Presets: silence, clipping, non-finite
+                     samples, DC, the low-end rule for BASS and SUB, and
+                     whether any two presets have converged on each other.
 
     Writes one WAV per benchmark patch and a measurement table to stdout.
 */
@@ -40,6 +46,9 @@
 #include "Plugin/ParameterRegistry.h"
 #include "Audio/Sources/Synth/SynthEngine.h"
 #include "Audio/NacarEngine.h"
+#include "Audio/Modulation/ModMatrix.h"
+#include "Presets/FactoryPresets.h"
+#include "Presets/PresetManager.h"
 
 using namespace nacar;
 
@@ -1260,6 +1269,659 @@ static void runAttribution (const juce::String& filter, double sampleRate)
 }
 
 // ===========================================================================
+//  PRESET VERIFICATION  -  the gate for Source/Presets
+//
+//  The benchmarks above are engineering probes: they ask whether the engine
+//  can reach a corner of its own range.  This asks a different question, about
+//  content rather than about DSP - is every factory preset audible, unclipped,
+//  finite, safe in the low end, and actually different from the others?
+//
+//  It renders each preset the way the instrument would: the whole parameter
+//  block applied through the registry, the preset's own FX chain ORDER
+//  published to the engine, and its modulation matrix rebuilt from the same
+//  ValueTree shape the MOD page writes.  Anything less would be measuring a
+//  patch the preset did not ask for.
+//
+//  It cannot say whether a preset is any good.  Nobody has listened to any of
+//  this and this mode does not pretend otherwise.  What it can do is find the
+//  four failures that are not matters of taste: silent, clipped, broken, or a
+//  duplicate of something already in the library.
+// ===========================================================================
+namespace presetcheck
+{
+    /** A preset rendered and measured, plus the two numbers the similarity
+        pass compares: where its energy sits, and how loud it is. */
+    struct Result
+    {
+        juce::String name, category, mood;
+        Measurements m;
+        float centroidOctaves = 0.0f;   ///< log2 of the centroid, so 200 Hz to
+                                        ///< 400 Hz is the same distance as 2 k to 4 k
+    };
+
+    /** Renders one factory preset through the whole instrument.
+
+        The BenchHost starts at the parameter list's defaults and
+        `PresetManager::applyParameters` writes every parameter - the preset's
+        own values where it has them, defaults everywhere else - through the
+        same gesture protocol the editor uses.  So this is the patch a user
+        would get, not an approximation of it. */
+    static juce::AudioBuffer<float> renderPreset (const presets::FactoryPreset& preset,
+                                                  double sampleRate, int blockSize)
+    {
+        BenchHost host;
+
+        const auto payload = PresetManager::payloadOf (preset);
+        PresetManager::applyParameters (host.registry, payload);
+
+        NacarEngine engine;
+        engine.prepare (sampleRate, blockSize, 2);
+
+        // Display order is DSP order, and a preset that reorders the chain is
+        // a different instrument.  Nothing is bypassed: a preset switches a
+        // module off with its own `*_on` flag, which is already a parameter.
+        engine.setFxOrder (FxOrder::fromState (PresetManager::fxOrderOf (payload), ""));
+        engine.rebuildModMatrix (PresetManager::makeModMatrixTree (payload));
+
+        // `master_gain` is applied by NacarProcessor and not by NacarEngine,
+        // so a render that stopped at the engine would measure a level the
+        // listener never hears - and a preset that trims its own output would
+        // look as though the trim did nothing.  This mirrors the processor
+        // exactly: the same juce::dsp::Gain, the same 20 ms ramp.
+        juce::dsp::Gain<float> outputGain;
+        outputGain.prepare ({ sampleRate, (juce::uint32) blockSize, 2 });
+        outputGain.setRampDurationSeconds (0.02);
+        outputGain.setGainDecibels (host.registry.userValue (PID::masterGain));
+
+        const auto& a = preset.audition;
+
+        const int totalSamples = (int) (sampleRate * a.seconds);
+        juce::AudioBuffer<float> out (2, totalSamples);
+        out.clear();
+
+        juce::AudioBuffer<float> block (2, blockSize);
+
+        const int releaseAt = (int) (totalSamples * 0.66);
+        const int intervals[4] = { 0, 7, 15, 22 };   // the open minor-ninth voicing
+        const int notes = juce::jlimit (1, 4, a.chordNotes);
+
+        TransportInfo transport;
+        transport.bpm = 120.0;
+        transport.playing = true;        // synced LFOs and Pulse need a running host
+
+        int position = 0;
+        bool noteSent = false, releaseSent = false;
+
+        while (position < totalSamples)
+        {
+            const int n = juce::jmin (blockSize, totalSamples - position);
+            block.clear();
+            block.setSize (2, n, false, false, true);
+
+            juce::MidiBuffer midi;
+
+            if (! noteSent)
+            {
+                for (int i = 0; i < notes; ++i)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, a.midiNote + intervals[i],
+                                                              a.velocity), 0);
+                noteSent = true;
+            }
+
+            if (! releaseSent && position + n > releaseAt)
+            {
+                for (int i = 0; i < notes; ++i)
+                    midi.addEvent (juce::MidiMessage::noteOff (1, a.midiNote + intervals[i]),
+                                   juce::jmax (0, releaseAt - position));
+                releaseSent = true;
+            }
+
+            engine.process (block, midi, host.registry, transport);
+
+            {
+                juce::dsp::AudioBlock<float> audioBlock (block);
+                outputGain.process (juce::dsp::ProcessContextReplacing<float> (audioBlock));
+            }
+
+            transport.ppqPosition += (double) n / sampleRate * (transport.bpm / 60.0);
+
+            for (int ch = 0; ch < 2; ++ch)
+                out.copyFrom (ch, position, block, ch, 0, n);
+
+            position += n;
+        }
+
+        return out;
+    }
+
+    /** True for the two categories the low-end rule is a hard requirement
+        for.  Everything else may legitimately be wide. */
+    static bool isLowEndCategory (const juce::String& category)
+    {
+        return category == "BASS" || category == "SUB";
+    }
+
+    /** Everything about the library that can be checked without rendering it.
+
+        These are the mistakes that do not show up as a bad measurement: a
+        category word the browser's filter row does not contain, so the preset
+        is unreachable through the interface; a value outside a parameter's own
+        range, which is silently clamped on apply so the preset is not what it
+        says it is; a routing naming one of the four per-voice sources, which
+        read zero in the global matrix and would be a preset claiming movement
+        it does not have; a chain order missing a slot. */
+    static int checkLibraryIntegrity()
+    {
+        const auto& library = presets::factoryLibrary();
+
+        const auto categories = juce::StringArray::fromTokens (
+            "KEYS PADS PLUCKS BELLS LEADS BASS SUB VOCAL-LIKE TEXTURE "
+            "ATMOSPHERE DRUMS PERCUSSION SEQUENCES", " ", "");
+
+        const auto moods = juce::StringArray::fromTokens (
+            "DARK INTIMATE BROKEN NOSTALGIC AIRY AGGRESSIVE ROMANTIC COLD WARM "
+            "CINEMATIC DIRTY DREAMY HAUNTED LUSH MINIMAL MYSTERIOUS", " ", "");
+
+        // The four the modulation matrix documents as reading zero, plus the
+        // empty slot.  A preset naming one of these would be a preset with a
+        // routing that does nothing.
+        const auto deadSources = juce::StringArray::fromTokens (
+            "NONE|ENV 1|ENV 2|VELOCITY|KEY TRACK", "|", "");
+
+        juce::StringArray seenNames;
+        int problems = 0;
+
+        auto complain = [&problems] (const juce::String& name, const juce::String& what)
+        {
+            std::cout << "  " << name.toStdString() << ": " << what.toStdString() << "\n";
+            ++problems;
+        };
+
+        for (const auto& preset : library)
+        {
+            if (seenNames.contains (preset.name))
+                complain (preset.name, "duplicate name");
+
+            seenNames.add (preset.name);
+
+            if (! categories.contains (preset.category))
+                complain (preset.name, "category \"" + preset.category
+                                       + "\" is not one of the browser's thirteen words");
+
+            if (! moods.contains (preset.mood))
+                complain (preset.name, "mood \"" + preset.mood
+                                       + "\" is not one of the browser's sixteen words");
+
+            if (preset.tags.size() < 2 || preset.tags.size() > 4)
+                complain (preset.name, "has " + juce::String (preset.tags.size())
+                                       + " tags; the brief asks for two to four");
+
+            if (preset.blurb.isEmpty())
+                complain (preset.name, "has no one-sentence identity");
+
+            // A value outside its range is clamped on apply, so the preset
+            // would not be the patch it is written as.
+            for (const auto& v : preset.values)
+            {
+                const auto& d = ParameterRegistry::definition (v.pid);
+
+                if (d.kind == ParamKind::floatValue
+                    && (v.value < d.minValue - 1.0e-4f || v.value > d.maxValue + 1.0e-4f))
+                    complain (preset.name, juce::String (d.id) + " = " + juce::String (v.value)
+                                           + " is outside [" + juce::String (d.minValue) + ", "
+                                           + juce::String (d.maxValue) + "]");
+
+                if (d.kind == ParamKind::choice)
+                {
+                    const int n = ParameterRegistry::choicesOf (v.pid).size();
+
+                    if (v.value < -0.4f || v.value > (float) n - 0.6f)
+                        complain (preset.name, juce::String (d.id) + " = " + juce::String (v.value)
+                                               + " is not one of its " + juce::String (n) + " choices");
+                }
+            }
+
+            for (const auto& m : preset.mods)
+            {
+                const juce::String source (m.source);
+
+                if (deadSources.contains (source))
+                    complain (preset.name, "routes " + source
+                                           + ", which reads zero in the global matrix");
+                else if (modSourceFromName (source) == ModSource::none)
+                    complain (preset.name, "routes an unknown source \"" + source + "\"");
+
+                if (m.depth < -1.0f || m.depth > 1.0f)
+                    complain (preset.name, "routing depth " + juce::String (m.depth)
+                                           + " is outside -1..1");
+            }
+
+            if (preset.mods.size() > 8)
+                complain (preset.name, "has " + juce::String ((int) preset.mods.size())
+                                       + " routings; the matrix holds eight");
+
+            if (preset.fxOrder.isNotEmpty())
+            {
+                const auto named = juce::StringArray::fromTokens (preset.fxOrder, ",", "");
+
+                if (named.size() != numFxSlots)
+                    complain (preset.name, "chain order names " + juce::String (named.size())
+                                           + " slots, not " + juce::String (numFxSlots));
+
+                for (int slot = 0; slot < numFxSlots; ++slot)
+                {
+                    const juce::String canonical (fxSlotName ((FxSlot) slot));
+
+                    if (! named.contains (canonical))
+                        complain (preset.name, "chain order leaves " + canonical
+                                               + " out, so it would never run");
+                }
+            }
+        }
+
+        std::cout << "\nLIBRARY INTEGRITY  names, vocabulary, parameter ranges, routings, chain order: "
+                  << (problems == 0 ? "clean" : "FAILED") << "\n";
+
+        return problems;
+    }
+
+    /** Saves a preset to disk and reads it back.
+
+        The file format is the only part of the preset system with no other
+        exercise: the factory set never goes through it, so a bug in it would
+        only ever be found by a user losing their own patch.  This writes one,
+        reads it, compares every parameter and deletes it again.
+
+        It uses the real user preset directory, because a round trip that did
+        not use the real path would not be testing the thing that can break. */
+    static int checkFileRoundTrip()
+    {
+        BenchHost host;
+        const auto& library = presets::factoryLibrary();
+
+        if (library.empty())
+            return 0;
+
+        // A preset with a full chain order, a mod matrix and both extremes of
+        // the parameter table in it.
+        const auto& source = library[0];
+        const auto payload = PresetManager::payloadOf (source);
+        PresetManager::applyParameters (host.registry, payload);
+
+        nacar::StateManager state (host.apvts);
+
+        {
+            auto chain = state.group (ids::FXCHAIN);
+            chain.setProperty (ids::fxOrder, PresetManager::fxOrderOf (payload), nullptr);
+
+            auto matrix = state.group (ids::MODMATRIX);
+            matrix.removeAllChildren (nullptr);
+
+            const auto built = PresetManager::makeModMatrixTree (payload);
+
+            for (int i = 0; i < built.getNumChildren(); ++i)
+                matrix.addChild (built.getChild (i).createCopy(), -1, nullptr);
+        }
+
+        PresetManager manager (host.registry, state);
+
+        const juce::String name ("NacarBench Round Trip");
+        const juce::StringArray tags { "verification", "temporary" };
+
+        const int index = manager.saveUserPreset (name, "TEXTURE", "MINIMAL", tags);
+
+        if (index < 0)
+        {
+            std::cout << "\n  FILE ROUND TRIP: could not write a preset to "
+                      << PresetManager::userPresetDirectory().getFullPathName().toStdString()
+                      << "\n";
+            return 1;
+        }
+
+        const auto file = manager[index].file;
+
+        nacar::PresetInfo readBack;
+        PresetManager::Payload readPayload;
+
+        int problems = 0;
+
+        if (! PresetManager::readPresetFile (file, readBack, readPayload))
+        {
+            std::cout << "\n  FILE ROUND TRIP: wrote a preset that cannot be read back\n";
+            ++problems;
+        }
+        else
+        {
+            if (readBack.name != name)                  { std::cout << "\n  FILE ROUND TRIP: name lost\n";     ++problems; }
+            if (readBack.category != "TEXTURE")         { std::cout << "  FILE ROUND TRIP: category lost\n";    ++problems; }
+            if (readBack.mood != "MINIMAL")             { std::cout << "  FILE ROUND TRIP: mood lost\n";        ++problems; }
+            if (readBack.tags != tags)                  { std::cout << "  FILE ROUND TRIP: tags lost\n";        ++problems; }
+
+            if (readPayload.fxOrder != PresetManager::fxOrderOf (payload))
+            {
+                std::cout << "  FILE ROUND TRIP: chain order lost\n";
+                ++problems;
+            }
+
+            if ((int) readPayload.values.size() != numParameters)
+            {
+                std::cout << "  FILE ROUND TRIP: " << readPayload.values.size()
+                          << " parameters survived of " << numParameters << "\n";
+                ++problems;
+            }
+
+            // Apply what came back to a second host and compare every
+            // parameter: that is the property a preset file actually promises.
+            BenchHost reloaded;
+            PresetManager::applyParameters (reloaded.registry, readPayload);
+
+            int mismatches = 0;
+
+            for (int i = 0; i < numParameters; ++i)
+            {
+                const auto pid = (PID) i;
+                auto* a = host.registry.parameter (pid);
+                auto* b = reloaded.registry.parameter (pid);
+
+                if (a == nullptr || b == nullptr)
+                    continue;
+
+                if (std::abs (a->convertTo0to1 (host.registry.userValue (pid))
+                              - b->convertTo0to1 (reloaded.registry.userValue (pid))) > 1.0e-4f)
+                {
+                    if (mismatches < 5)
+                        std::cout << "  FILE ROUND TRIP: " << ParameterRegistry::idOf (pid)
+                                  << " came back as " << reloaded.registry.userValue (pid)
+                                  << " instead of " << host.registry.userValue (pid) << "\n";
+                    ++mismatches;
+                }
+            }
+
+            if (mismatches > 0)
+            {
+                std::cout << "  FILE ROUND TRIP: " << mismatches << " parameter(s) did not survive\n";
+                ++problems;
+            }
+
+            int enabledRoutings = 0;
+
+            for (const auto& r : readPayload.mods)
+                enabledRoutings += (r.enabled && r.source != "NONE") ? 1 : 0;
+
+            if (enabledRoutings != (int) source.mods.size())
+            {
+                std::cout << "  FILE ROUND TRIP: " << enabledRoutings << " routing(s) survived of "
+                          << source.mods.size() << "\n";
+                ++problems;
+            }
+        }
+
+        file.deleteFile();
+
+        std::cout << "\nFILE ROUND TRIP  save -> read -> apply, every parameter by string ID: "
+                  << (problems == 0 ? "clean" : "FAILED") << "\n"
+                  << "  (written to and removed from "
+                  << PresetManager::userPresetDirectory().getFullPathName().toStdString() << ")\n";
+
+        return problems;
+    }
+
+    static int run (const juce::String& filter, double sampleRate,
+                    const juce::File& outDir, bool writeFiles)
+    {
+        const auto& library = presets::factoryLibrary();
+
+        std::cout << "NACAR factory preset verification\n"
+                     "  sample rate  " << sampleRate << " Hz\n"
+                     "  library      " << library.size() << " presets\n"
+                     "  output       " << (writeFiles ? outDir.getFullPathName().toStdString()
+                                                      : std::string ("(measurement only)"))
+                  << "\n\n"
+                     "  Each preset is rendered through the whole instrument with its own\n"
+                     "  chain order and modulation matrix, on the note it was voiced around.\n"
+                     "  These are measurements. Nobody has listened to any of it.\n\n";
+
+        std::cout << std::left
+                  << std::setw (23) << "PRESET"
+                  << std::setw (12) << "CATEGORY"
+                  << std::setw (12) << "MOOD"
+                  << std::right
+                  << std::setw (8)  << "PEAK"
+                  << std::setw (8)  << "RMS"
+                  << std::setw (7)  << "CREST"
+                  << std::setw (9)  << "CENTR"
+                  << std::setw (7)  << "LOW%"
+                  << std::setw (7)  << "MID%"
+                  << std::setw (7)  << "HIGH%"
+                  << std::setw (8)  << "MONO"
+                  << std::setw (8)  << "LOWCOR"
+                  << std::setw (9)  << "DC"
+                  << "  FLAGS"
+                  << "\n"
+                  << std::string (140, '-') << "\n";
+
+        std::vector<Result> results;
+        results.reserve (library.size());
+
+        int problems = 0, rendered = 0;
+
+        for (const auto& preset : library)
+        {
+            if (filter.isNotEmpty()
+                && ! (preset.name.containsIgnoreCase (filter)
+                      || preset.category.containsIgnoreCase (filter)
+                      || preset.mood.containsIgnoreCase (filter)))
+                continue;
+
+            const auto audio = renderPreset (preset, sampleRate, 256);
+
+            const double fundamental =
+                juce::MidiMessage::getMidiNoteInHertz (preset.audition.midiNote);
+
+            // Aliasing is never reported here: every preset detunes, chords,
+            // modulates or granulates by design, so the figure would be
+            // measuring the preset rather than the oscillator.
+            const auto m = measure (audio, sampleRate, fundamental, false);
+
+            if (writeFiles)
+                writeWav (outDir.getChildFile (juce::File::createLegalFileName (preset.name)
+                                               + "_preset.wav"),
+                          audio, sampleRate);
+
+            juce::StringArray flags;
+
+            if (! m.allFinite)                    { flags.add ("NON-FINITE"); ++problems; }
+            if (m.peakDb > 0.0f)                  { flags.add ("CLIP");       ++problems; }
+            if (m.peakDb < -40.0f)                { flags.add ("QUIET");      ++problems; }
+            if (std::abs (m.dcOffset) > 0.01f)    { flags.add ("DC");         ++problems; }
+            if (m.monoRetainDb < -3.0f)           { flags.add ("WIDE");       ++problems; }
+
+            if (isLowEndCategory (preset.category))
+            {
+                if (m.monoRetainDb < -1.0f)       { flags.add ("LOW-MONO");   ++problems; }
+                if (m.lowCorrelation < 0.9f)      { flags.add ("LOW-CORR");   ++problems; }
+            }
+
+            std::cout << std::left
+                      << std::setw (23) << preset.name.toStdString()
+                      << std::setw (12) << preset.category.toStdString()
+                      << std::setw (12) << preset.mood.toStdString()
+                      << std::right << std::fixed << std::setprecision (1)
+                      << std::setw (8)  << m.peakDb
+                      << std::setw (8)  << m.rmsDb
+                      << std::setw (7)  << m.crestDb
+                      << std::setw (9)  << m.centroidHz
+                      << std::setw (7)  << m.lowEnergyPct
+                      << std::setw (7)  << m.midEnergyPct
+                      << std::setw (7)  << m.highEnergyPct
+                      << std::setw (8)  << m.monoRetainDb
+                      << std::setprecision (2)
+                      << std::setw (8)  << m.lowCorrelation
+                      << std::setprecision (4)
+                      << std::setw (9)  << m.dcOffset
+                      << "  " << flags.joinIntoString (" ").toStdString()
+                      << "\n";
+
+            Result r;
+            r.name     = preset.name;
+            r.category = preset.category;
+            r.mood     = preset.mood;
+            r.m        = m;
+            r.centroidOctaves = std::log2 (juce::jmax (20.0f, m.centroidHz));
+
+            results.push_back (r);
+            ++rendered;
+        }
+
+        // -------------------------------------------------------------------
+        //  Did they actually come out different?
+        //
+        //  Two presets that measure alike are not necessarily the same patch -
+        //  a bell and a pluck can share a centroid - so this does not fail the
+        //  run.  It names the closest pairs so an accidental duplicate, which
+        //  is what happens when a preset is copied and only the filter moved,
+        //  is visible instead of hiding in fifty-four rows.
+        //
+        //  The distance is deliberately crude and deliberately perceptual:
+        //  octaves of spectral centroid, decibels of RMS and the low/high
+        //  balance, each scaled so one unit is about as noticeable as one unit
+        //  of the others.
+        // -------------------------------------------------------------------
+        if (results.size() >= 2)
+        {
+            struct Pair { float distance; int a, b; };
+            std::vector<Pair> pairs;
+
+            for (size_t i = 0; i < results.size(); ++i)
+                for (size_t j = i + 1; j < results.size(); ++j)
+                {
+                    const auto& x = results[i];
+                    const auto& y = results[j];
+
+                    const float dCentroid = (x.centroidOctaves - y.centroidOctaves) / 1.0f;
+                    const float dLevel    = (x.m.rmsDb - y.m.rmsDb) / 6.0f;
+                    const float dLow      = (x.m.lowEnergyPct - y.m.lowEnergyPct) / 25.0f;
+                    const float dHigh     = (x.m.highEnergyPct - y.m.highEnergyPct) / 25.0f;
+                    const float dCrest    = (x.m.crestDb - y.m.crestDb) / 8.0f;
+
+                    pairs.push_back ({ std::sqrt (dCentroid * dCentroid + dLevel * dLevel
+                                                  + dLow * dLow + dHigh * dHigh
+                                                  + dCrest * dCrest),
+                                       (int) i, (int) j });
+                }
+
+            std::sort (pairs.begin(), pairs.end(),
+                       [] (const Pair& a, const Pair& b) { return a.distance < b.distance; });
+
+            std::cout << "\nCLOSEST PAIRS  (octaves of centroid, dB of level, spectral balance)\n"
+                      << std::left << "  " << std::setw (23) << "A"
+                      << std::setw (23) << "B"
+                      << std::right << std::setw (10) << "DISTANCE"
+                      << std::setw (12) << "dCENTROID"
+                      << std::setw (9) << "dRMS" << "\n"
+                      << "  " << std::string (75, '-') << "\n";
+
+            const int shown = juce::jmin (6, (int) pairs.size());
+
+            for (int i = 0; i < shown; ++i)
+            {
+                const auto& x = results[(size_t) pairs[(size_t) i].a];
+                const auto& y = results[(size_t) pairs[(size_t) i].b];
+
+                std::cout << std::left << "  "
+                          << std::setw (23) << x.name.toStdString()
+                          << std::setw (23) << y.name.toStdString()
+                          << std::right << std::fixed << std::setprecision (3)
+                          << std::setw (10) << pairs[(size_t) i].distance
+                          << std::setprecision (2)
+                          << std::setw (12) << (x.centroidOctaves - y.centroidOctaves)
+                          << std::setprecision (1)
+                          << std::setw (9) << (x.m.rmsDb - y.m.rmsDb)
+                          << "\n";
+            }
+
+            std::cout << "\n  A distance below about 0.25 is worth opening both presets for.\n";
+        }
+
+        // -- coverage, because a library is also a distribution --------------
+        //
+        //  Only for a whole run: a filtered one would print thirteen zeroes and
+        //  one number, which says something about the filter and nothing about
+        //  the library.
+        if (filter.isEmpty())
+        {
+            juce::StringArray categories = juce::StringArray::fromTokens (
+                "KEYS PADS PLUCKS BELLS LEADS BASS SUB VOCAL-LIKE TEXTURE "
+                "ATMOSPHERE DRUMS PERCUSSION SEQUENCES", " ", "");
+
+            juce::StringArray moods = juce::StringArray::fromTokens (
+                "DARK INTIMATE BROKEN NOSTALGIC AIRY AGGRESSIVE ROMANTIC COLD WARM "
+                "CINEMATIC DIRTY DREAMY HAUNTED LUSH MINIMAL MYSTERIOUS", " ", "");
+
+            std::cout << "\nCOVERAGE\n  categories ";
+
+            int emptyCategories = 0, emptyMoods = 0;
+
+            for (const auto& c : categories)
+            {
+                int n = 0;
+                for (const auto& r : results)
+                    n += (r.category == c) ? 1 : 0;
+
+                if (n == 0) ++emptyCategories;
+
+                std::cout << c.toStdString() << ":" << n << "  ";
+            }
+
+            std::cout << "\n  moods      ";
+
+            for (const auto& mo : moods)
+            {
+                int n = 0;
+                for (const auto& r : results)
+                    n += (r.mood == mo) ? 1 : 0;
+
+                if (n == 0) ++emptyMoods;
+
+                std::cout << mo.toStdString() << ":" << n << "  ";
+            }
+
+            std::cout << "\n";
+
+            // A category word with no preset is a filter chip that leads
+            // nowhere, so it fails the run.  A mood word with none is reported
+            // but does not: moods are a colour across the library rather than a
+            // promise that each one is filled.
+            if (emptyCategories > 0)
+            {
+                std::cout << "\n  " << emptyCategories << " category word(s) have no preset.\n";
+                problems += emptyCategories;
+            }
+
+            if (emptyMoods > 0)
+                std::cout << "  " << emptyMoods << " mood word(s) have no preset.\n";
+        }
+
+        if (filter.isEmpty())
+        {
+            problems += checkLibraryIntegrity();
+            problems += checkFileRoundTrip();
+        }
+
+        std::cout << "\n" << rendered << " preset" << (rendered == 1 ? "" : "s") << " rendered, "
+                  << problems << " threshold violation" << (problems == 1 ? "" : "s") << "\n\n"
+                  << "Thresholds: -40 dBFS < peak <= 0 dBFS | |DC| <= 0.01 | finite everywhere\n"
+                  << "            mono retention >= -3 dB, and >= -1 dB with low-band\n"
+                  << "            correlation >= 0.90 for BASS and SUB\n"
+                  << "            every category word carries at least one preset\n\n"
+                  << "These are measurements, not a verdict. Whether a preset is worth\n"
+                  << "loading is decided by listening to it, which nobody has done.\n";
+
+        return problems;
+    }
+}
+
+// ===========================================================================
 int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -1270,6 +1932,7 @@ int main (int argc, char* argv[])
     bool cpuOnly = false;
     bool throughChain = false;
     bool attribute = false;
+    bool presetMode = false;
     juce::String filter;
 
     for (int i = 1; i < argc; ++i)
@@ -1282,6 +1945,7 @@ int main (int argc, char* argv[])
         else if (arg == "--cpu")                   cpuOnly = true;
         else if (arg == "--chain")                 throughChain = true;
         else if (arg == "--attribute")             attribute = true;
+        else if (arg == "--presets")               presetMode = true;
         else if (! arg.startsWith ("--"))          filter = arg;
     }
 
@@ -1295,6 +1959,14 @@ int main (int argc, char* argv[])
     {
         runAttribution (filter, sampleRate);
         return 0;
+    }
+
+    if (presetMode)
+    {
+        if (writeFiles)
+            outDir.createDirectory();
+
+        return presetcheck::run (filter, sampleRate, outDir, writeFiles) > 0 ? 1 : 0;
     }
 
     if (writeFiles)

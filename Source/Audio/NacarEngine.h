@@ -3,8 +3,10 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <array>
 #include <atomic>
+#include <memory>
 
 #include "../Plugin/ParameterRegistry.h"
+#include "EngineContext.h"
 #include "Sources/Synth/SynthEngine.h"
 
 namespace nacar
@@ -21,37 +23,67 @@ namespace nacar
     FxSlot fxSlotFromName (juce::StringRef) noexcept;
 
     /**
-        The chain order, handed across the thread boundary as a packed integer.
+        The chain order and its bypasses, handed across the thread boundary as
+        a packed integer.
 
-        The audio thread must never read a ValueTree, so the editor resolves the
-        order once, packs it into 32 bits (six 3-bit slot indices plus a count)
-        and publishes it with a single atomic store.  The audio thread unpacks
-        it at the top of each block.
+        The audio thread must never read a ValueTree, so the editor resolves
+        both once on the message thread, packs them into 32 bits and publishes
+        them with a single atomic store.  The audio thread unpacks at the top of
+        each block.  27 bits are used: six three-bit slot indices, a three-bit
+        count and a six-bit bypass mask.
     */
     struct FxOrder
     {
         std::array<FxSlot, (size_t) numFxSlots> slots {};
         int count = 0;
+        juce::uint32 bypassMask = 0;        ///< bit N set == slot N bypassed
 
         static FxOrder defaultOrder() noexcept;
-        static FxOrder fromCommaSeparated (juce::StringRef) noexcept;
+
+        /** Parses the FXCHAIN tree's two comma-separated properties. */
+        static FxOrder fromState (juce::StringRef order, juce::StringRef bypassed) noexcept;
+
+        bool isBypassed (FxSlot s) const noexcept
+        {
+            return (bypassMask & (1u << (juce::uint32) s)) != 0;
+        }
 
         juce::uint32 pack() const noexcept;
         static FxOrder unpack (juce::uint32) noexcept;
     };
 
+    /** What the host says about the transport, as of this block. */
+    struct TransportInfo
+    {
+        double bpm = 120.0;
+        double ppqPosition = 0.0;
+        bool   playing = false;
+    };
+
     /**
         THE NACAR SIGNAL CHAIN.
 
-        Owns every engine and routes between them.  The processor holds one of
-        these and does nothing but hand it a buffer.
+        Owns every engine and routes between them.  The processor holds one and
+        does nothing but hand it a buffer.
 
-            SOURCE (synth / sample / grain / resonator / spectral)
-              -> MEMORY
-              -> FX CHAIN, in the user's order
-              -> ATMOSPHERE (aura, shadow, patina)
-              -> WEIGHT
-              -> output
+            SOURCE        the synth, and in later phases the four other engines
+              -> MEMORY       generational history
+              -> FX CHAIN     retro, crush, filter, rewind, grain, space,
+                              in whatever order the user has put them
+              -> SHADOW       an atmospheric duplicate of the finished sound
+              -> AURA         the environment it all sits in
+              -> PATINA       the surface it has ended up with
+              -> WEIGHT       physical mass, last
+              -> OUTPUT       Pulse's volume and width destinations
+
+        Why that order.  Memory is first because it is about what the *source*
+        has been through - putting it after the effects would age the effects
+        rather than the sound.  The FX chain is where the user's decisions live.
+        Shadow duplicates the finished sound rather than the raw one, or it
+        would be a duplicate of something nobody heard.  Aura is the environment
+        and so contains everything.  Patina is the surface of the final object.
+        Weight is last because it is the only stage whose job is the finished
+        thing's physical size.
 
         Realtime contract: after prepare(), nothing below allocates, locks,
         touches the filesystem or logs.
@@ -68,12 +100,12 @@ namespace nacar
         /** Forces maximum quality regardless of the quality parameter. */
         void setOfflineRendering (bool) noexcept;
 
-        /** Publishes a new chain order.  Message thread; lock-free. */
+        /** Publishes a new chain order and bypass mask.  Message thread. */
         void setFxOrder (const FxOrder&) noexcept;
 
         /** Renders one block.  Audio thread only. */
         void process (juce::AudioBuffer<float>&, juce::MidiBuffer&,
-                      const ParameterRegistry&, double hostBpm);
+                      const ParameterRegistry&, const TransportInfo&);
 
         void allNotesOff();
 

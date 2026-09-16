@@ -30,6 +30,7 @@
 
 #include "Plugin/ParameterRegistry.h"
 #include "Audio/Sources/Synth/SynthEngine.h"
+#include "Audio/NacarEngine.h"
 
 using namespace nacar;
 
@@ -810,6 +811,76 @@ static std::vector<Benchmark> makeBenchmarks()
 // ===========================================================================
 //  Rendering
 // ===========================================================================
+/** Renders through the whole instrument rather than the synth alone, so the
+    same measurements can be taken of what a listener would actually hear. */
+static juce::AudioBuffer<float> renderThroughChain (const Benchmark& bench,
+                                                    double sampleRate, int blockSize)
+{
+    BenchHost host;
+    initPatch (host);
+
+    if (bench.setup)
+        bench.setup (host);
+
+    NacarEngine engine;
+    engine.prepare (sampleRate, blockSize, 2);
+
+    const int totalSamples = (int) (sampleRate * bench.seconds);
+    juce::AudioBuffer<float> out (2, totalSamples);
+    out.clear();
+
+    juce::AudioBuffer<float> block (2, blockSize);
+
+    const int releaseAt = (int) (totalSamples * 0.66);
+    const int intervals[4] = { 0, 7, 15, 22 };
+
+    TransportInfo transport;
+    transport.bpm = 120.0;
+    transport.playing = true;
+
+    int position = 0;
+    bool noteSent = false, releaseSent = false;
+
+    while (position < totalSamples)
+    {
+        const int n = juce::jmin (blockSize, totalSamples - position);
+        block.clear();
+        block.setSize (2, n, false, false, true);
+
+        juce::MidiBuffer midi;
+
+        if (! noteSent)
+        {
+            for (int i = 0; i < juce::jmax (1, bench.chordNotes); ++i)
+                midi.addEvent (juce::MidiMessage::noteOn (
+                                   1, bench.midiNote + intervals[i % 4], bench.velocity), 0);
+
+            noteSent = true;
+        }
+
+        if (! releaseSent && position + n > releaseAt)
+        {
+            for (int i = 0; i < juce::jmax (1, bench.chordNotes); ++i)
+                midi.addEvent (juce::MidiMessage::noteOff (
+                                   1, bench.midiNote + intervals[i % 4]),
+                               juce::jmax (0, releaseAt - position));
+
+            releaseSent = true;
+        }
+
+        engine.process (block, midi, host.registry, transport);
+
+        transport.ppqPosition += (double) n / sampleRate * (transport.bpm / 60.0);
+
+        for (int ch = 0; ch < 2; ++ch)
+            out.copyFrom (ch, position, block, ch, 0, n);
+
+        position += n;
+    }
+
+    return out;
+}
+
 static juce::AudioBuffer<float> renderBenchmark (const Benchmark& bench,
                                                  double sampleRate, int blockSize)
 {
@@ -992,6 +1063,7 @@ int main (int argc, char* argv[])
     double sampleRate = 48000.0;
     bool writeFiles = true;
     bool cpuOnly = false;
+    bool throughChain = false;
     juce::String filter;
 
     for (int i = 1; i < argc; ++i)
@@ -1002,6 +1074,7 @@ int main (int argc, char* argv[])
         else if (arg == "--rate" && i + 1 < argc)  sampleRate = juce::String (argv[++i]).getDoubleValue();
         else if (arg == "--no-wav")                writeFiles = false;
         else if (arg == "--cpu")                   cpuOnly = true;
+        else if (arg == "--chain")                 throughChain = true;
         else if (! arg.startsWith ("--"))          filter = arg;
     }
 
@@ -1014,7 +1087,8 @@ int main (int argc, char* argv[])
     if (writeFiles)
         outDir.createDirectory();
 
-    std::cout << "NACAR synth benchmark\n"
+    std::cout << (throughChain ? "NACAR full-chain benchmark\n"
+                               : "NACAR synth benchmark\n")
               << "  sample rate  " << sampleRate << " Hz\n"
               << "  output       " << (writeFiles ? outDir.getFullPathName().toStdString()
                                                   : std::string ("(measurement only)"))
@@ -1045,12 +1119,16 @@ int main (int argc, char* argv[])
         if (filter.isNotEmpty() && ! juce::String (bench.name).containsIgnoreCase (filter))
             continue;
 
-        const auto audio = renderBenchmark (bench, sampleRate, 256);
+        const auto audio = throughChain ? renderThroughChain (bench, sampleRate, 256)
+                                        : renderBenchmark (bench, sampleRate, 256);
         const double fundamental = juce::MidiMessage::getMidiNoteInHertz (bench.midiNote);
-        const auto m = measure (audio, sampleRate, fundamental, bench.measureAliasing);
+        const auto m = measure (audio, sampleRate, fundamental,
+                                bench.measureAliasing && ! throughChain);
 
         if (writeFiles)
-            writeWav (outDir.getChildFile (juce::String (bench.name) + ".wav"), audio, sampleRate);
+            writeWav (outDir.getChildFile (juce::String (bench.name)
+                                               + (throughChain ? "_chain" : "") + ".wav"),
+                      audio, sampleRate);
 
         std::cout << std::left
                   << std::setw (24) << bench.name

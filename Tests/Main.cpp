@@ -18,6 +18,7 @@
 #include "../Source/Plugin/StateManager.h"
 #include "../Source/Audio/Sources/Synth/SynthEngine.h"
 #include "../Source/Audio/Sources/Synth/Halfband.h"
+#include "../Source/Audio/NacarEngine.h"
 
 using namespace nacar;
 
@@ -796,6 +797,346 @@ struct HalfbandTests : juce::UnitTest
 };
 
 // ===========================================================================
+//  The chain
+//
+//  Eleven engines in series, in an order the user can change at runtime.  These
+//  tests are about the things that go wrong when DSP is composed rather than
+//  written: a module that is off still colouring the signal, a reorder losing a
+//  slot, a feedback network that is stable alone and not in series, and the low
+//  end quietly decorrelating as it passes through six stereo processes.
+// ===========================================================================
+struct ChainTests : juce::UnitTest
+{
+    ChainTests() : juce::UnitTest ("Chain", "nacar") {}
+
+    /** Everything that can colour the signal, turned off. */
+    static void silenceTheChain (TestHost& host)
+    {
+        for (auto pid : { PID::retroOn, PID::crushOn, PID::fxFilterOn, PID::rewindOn,
+                          PID::grainFxOn, PID::spaceOn, PID::auraOn, PID::shadowOn,
+                          PID::patinaOn, PID::pulseOn, PID::breathOn })
+            host.registry.setFromUI (pid, 0.0f);
+
+        host.registry.setFromUI (PID::macroMemory, 0.0f);
+        host.registry.setFromUI (PID::macroWeight, 0.0f);
+        host.registry.setFromUI (PID::macroCharacter, 0.0f);
+        host.registry.setFromUI (PID::macroMotion, 0.0f);
+        host.registry.setFromUI (PID::macroAlter, 0.0f);
+    }
+
+    struct Rendered
+    {
+        juce::AudioBuffer<float> audio;
+        bool  allFinite = true;
+        float peak = 0.0f;
+    };
+
+    static void scan (Rendered& r)
+    {
+        for (int ch = 0; ch < r.audio.getNumChannels(); ++ch)
+        {
+            const auto* d = r.audio.getReadPointer (ch);
+
+            for (int i = 0; i < r.audio.getNumSamples(); ++i)
+            {
+                if (! std::isfinite (d[i]))
+                    r.allFinite = false;
+
+                r.peak = juce::jmax (r.peak, std::abs (d[i]));
+            }
+        }
+    }
+
+    static Rendered renderChain (NacarEngine& engine, const ParameterRegistry& params,
+                                 double sampleRate, int blockSize, int numBlocks,
+                                 int midiNote = 45)
+    {
+        Rendered r;
+        r.audio.setSize (2, blockSize * numBlocks);
+        r.audio.clear();
+
+        juce::AudioBuffer<float> block (2, blockSize);
+        TransportInfo transport;
+        transport.bpm = 120.0;
+        transport.playing = true;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            block.clear();
+            juce::MidiBuffer midi;
+
+            if (b == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, midiNote, 0.9f), 0);
+
+            if (b == numBlocks * 3 / 4)
+                midi.addEvent (juce::MidiMessage::noteOff (1, midiNote), 0);
+
+            engine.process (block, midi, params, transport);
+
+            transport.ppqPosition += (double) blockSize / sampleRate * (transport.bpm / 60.0);
+
+            for (int ch = 0; ch < 2; ++ch)
+                r.audio.copyFrom (ch, b * blockSize, block, ch, 0, blockSize);
+        }
+
+        scan (r);
+        return r;
+    }
+
+    void runTest() override
+    {
+        beginTest ("FxOrder survives packing");
+        {
+            juce::Random rng (20250916);
+
+            for (int trial = 0; trial < 500; ++trial)
+            {
+                FxOrder o;
+                o.count = rng.nextInt ({ 1, numFxSlots + 1 });
+
+                juce::Array<int> pool;
+                for (int i = 0; i < numFxSlots; ++i)
+                    pool.add (i);
+
+                for (int i = 0; i < o.count; ++i)
+                    o.slots[(size_t) i] = (FxSlot) pool.removeAndReturn (rng.nextInt (pool.size()));
+
+                o.bypassMask = (juce::uint32) rng.nextInt (64);
+
+                const auto back = FxOrder::unpack (o.pack());
+
+                expectEquals (back.count, o.count);
+                expectEquals ((int) back.bypassMask, (int) o.bypassMask);
+
+                for (int i = 0; i < o.count; ++i)
+                    expect (back.slots[(size_t) i] == o.slots[(size_t) i],
+                            "slot " + juce::String (i) + " changed through packing");
+            }
+        }
+
+        beginTest ("FxOrder tolerates whatever the state tree contains");
+        {
+            // Duplicates, unknown names, empty, and a bypass list that names a
+            // slot which is not in the order at all.
+            const auto dup = FxOrder::fromState ("RETRO,RETRO,SPACE", "");
+            expectEquals (dup.count, 2);
+
+            const auto unknown = FxOrder::fromState ("RETRO,NOT_A_SLOT,SPACE", "");
+            expectEquals (unknown.count, 2);
+
+            const auto empty = FxOrder::fromState ("", "");
+            expectEquals (empty.count, numFxSlots);
+
+            const auto strange = FxOrder::fromState ("RETRO", "SPACE,GRAIN");
+            expectEquals (strange.count, 1);
+            expect (strange.isBypassed (FxSlot::space));
+
+            const auto junk = FxOrder::fromState ("!!!,,,", "!!!");
+            expectEquals (junk.count, numFxSlots);
+        }
+
+        beginTest ("a silent chain leaves the mid signal alone");
+        {
+            // With every module off and every colouring macro at zero, the only
+            // thing between the synth and the output is the stereo stage, which
+            // by design touches the side signal and never the mid.  So the mono
+            // sum must come through untouched - if it does not, something that
+            // was supposed to be off is still processing.
+            TestHost host;
+            silenceTheChain (host);
+
+            SynthEngine reference;
+            reference.prepare (48000.0, 256, 2);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+
+            const int blocks = 120;
+
+            juce::AudioBuffer<float> refBlock (2, 256);
+            juce::AudioBuffer<float> refAll (2, 256 * blocks);
+            refAll.clear();
+
+            for (int b = 0; b < blocks; ++b)
+            {
+                refBlock.clear();
+                juce::MidiBuffer midi;
+
+                if (b == 0)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, 45, 0.9f), 0);
+
+                if (b == blocks * 3 / 4)
+                    midi.addEvent (juce::MidiMessage::noteOff (1, 45), 0);
+
+                reference.process (refBlock, midi, host.registry, 120.0);
+
+                for (int ch = 0; ch < 2; ++ch)
+                    refAll.copyFrom (ch, b * 256, refBlock, ch, 0, 256);
+            }
+
+            const auto chain = renderChain (engine, host.registry, 48000.0, 256, blocks);
+
+            expect (chain.allFinite, "the silent chain produced a non-finite sample");
+
+            double diff = 0.0, signal = 0.0;
+
+            for (int i = 0; i < refAll.getNumSamples(); ++i)
+            {
+                const double refMid = 0.5 * ((double) refAll.getSample (0, i)
+                                             + (double) refAll.getSample (1, i));
+                const double chainMid = 0.5 * ((double) chain.audio.getSample (0, i)
+                                               + (double) chain.audio.getSample (1, i));
+
+                diff += (chainMid - refMid) * (chainMid - refMid);
+                signal += refMid * refMid;
+            }
+
+            expect (signal > 1.0e-9, "the reference render was silent");
+
+            const double db = 10.0 * std::log10 (juce::jmax (1.0e-18, diff / signal));
+            logMessage ("    silent-chain mid difference: " + juce::String (db, 1) + " dB");
+
+            expect (db < -60.0, "a module that is off is still colouring the signal: "
+                                    + juce::String (db, 1) + " dB of difference");
+        }
+
+        beginTest ("the whole chain stays finite and bounded at every sample rate");
+        {
+            for (auto rate : { 44100.0, 48000.0, 88200.0, 96000.0 })
+            {
+                TestHost host;
+
+                // Everything on, and hard.
+                for (auto pid : { PID::retroOn, PID::crushOn, PID::fxFilterOn, PID::rewindOn,
+                                  PID::grainFxOn, PID::spaceOn, PID::auraOn, PID::shadowOn,
+                                  PID::patinaOn, PID::pulseOn, PID::breathOn })
+                    host.registry.setFromUI (pid, 1.0f);
+
+                for (auto pid : { PID::macroMemory, PID::macroCharacter, PID::macroMotion,
+                                  PID::macroWorld, PID::macroWeight, PID::macroAlter })
+                    host.registry.setFromUI (pid, 1.0f);
+
+                host.registry.setFromUI (PID::memoryGen, 3.0f);
+                host.registry.setFromUI (PID::spaceDecay, 30.0f);
+                host.registry.setFromUI (PID::spaceMix, 1.0f);
+                host.registry.setFromUI (PID::grainFeedback, 0.95f);
+                host.registry.setFromUI (PID::grainMix, 1.0f);
+                host.registry.setFromUI (PID::rewindMix, 1.0f);
+                host.registry.setFromUI (PID::crushMix, 1.0f);
+                host.registry.setFromUI (PID::fxFilterRes, 1.0f);
+                host.registry.setFromUI (PID::pulseDepth, 1.0f);
+
+                NacarEngine engine;
+                engine.prepare (rate, 128, 2);
+
+                const auto r = renderChain (engine, host.registry, rate, 128,
+                                            (int) (rate * 3.0 / 128.0));
+
+                const juce::String at = " at " + juce::String (rate, 0) + " Hz";
+
+                expect (r.allFinite, "the chain produced a NaN or an infinity" + at);
+                expect (r.peak < 8.0f, "the chain ran away" + at
+                                           + ": peak " + juce::String (r.peak));
+            }
+        }
+
+        beginTest ("every chain order renders");
+        {
+            // Six slots is 720 orders; a sample of them is enough to catch a
+            // slot that only works in one position.
+            juce::Random rng (4192);
+
+            for (int trial = 0; trial < 12; ++trial)
+            {
+                TestHost host;
+
+                for (auto pid : { PID::retroOn, PID::crushOn, PID::fxFilterOn,
+                                  PID::rewindOn, PID::grainFxOn, PID::spaceOn })
+                    host.registry.setFromUI (pid, 1.0f);
+
+                juce::Array<int> pool;
+                for (int i = 0; i < numFxSlots; ++i)
+                    pool.add (i);
+
+                FxOrder order;
+                order.count = numFxSlots;
+
+                for (int i = 0; i < numFxSlots; ++i)
+                    order.slots[(size_t) i] =
+                        (FxSlot) pool.removeAndReturn (rng.nextInt (pool.size()));
+
+                NacarEngine engine;
+                engine.prepare (48000.0, 256, 2);
+                engine.setFxOrder (order);
+
+                const auto r = renderChain (engine, host.registry, 48000.0, 256, 90);
+
+                expect (r.allFinite, "chain order " + juce::String (trial)
+                                         + " produced a non-finite sample");
+                expect (r.peak < 8.0f, "chain order " + juce::String (trial) + " ran away");
+            }
+        }
+
+        beginTest ("the chain does not decorrelate the low end");
+        {
+            // Specification sections 38, 40 and 43: width is never bought at
+            // the cost of the low end.  Six stereo processes in series is where
+            // that is most likely to be lost.
+            TestHost host;
+
+            for (auto pid : { PID::retroOn, PID::fxFilterOn, PID::spaceOn,
+                              PID::auraOn, PID::shadowOn, PID::patinaOn })
+                host.registry.setFromUI (pid, 1.0f);
+
+            host.registry.setFromUI (PID::macroWorld, 1.0f);
+            host.registry.setFromUI (PID::macroMemory, 0.8f);
+            host.registry.setFromUI (PID::subLevel, 1.0f);
+            host.registry.setFromUI (PID::oscALevel, 0.3f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+
+            const auto r = renderChain (engine, host.registry, 48000.0, 256, 150, 33);
+
+            expect (r.allFinite);
+
+            // One-pole low pass at 150 Hz on both channels, then correlate.
+            const double a = std::exp (-2.0 * juce::MathConstants<double>::pi * 150.0 / 48000.0);
+            double zl = 0.0, zr = 0.0, sll = 0.0, srr = 0.0, slr = 0.0;
+
+            const int start = r.audio.getNumSamples() / 6;
+
+            for (int i = start; i < r.audio.getNumSamples(); ++i)
+            {
+                zl = (1.0 - a) * r.audio.getSample (0, i) + a * zl;
+                zr = (1.0 - a) * r.audio.getSample (1, i) + a * zr;
+
+                sll += zl * zl;
+                srr += zr * zr;
+                slr += zl * zr;
+            }
+
+            const double denom = std::sqrt (sll * srr);
+
+            if (denom > 1.0e-12)
+            {
+                const double correlation = slr / denom;
+                logMessage ("    low-band correlation through the chain: "
+                            + juce::String (correlation, 3));
+
+                expect (correlation > 0.85,
+                        "the chain decorrelated the low end: " + juce::String (correlation, 3));
+            }
+            else
+            {
+                logMessage ("    no low-band energy - skipped");
+            }
+        }
+    }
+};
+
+// ===========================================================================
+static ChainTests          chainTests;
 static HalfbandTests       halfbandTests;
 static ParameterTableTests parameterTableTests;
 static StateTests          stateTests;

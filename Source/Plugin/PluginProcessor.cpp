@@ -10,9 +10,55 @@ namespace nacar
           stateManager (apvts)
     {
         registry.attach (apvts);
+
+        // The chain order lives in the session tree and can change from the
+        // editor, from a preset load or from a host restore, so the processor
+        // watches the whole session rather than one child: StateManager's
+        // restore replaces children wholesale, and a listener attached to a
+        // child would be left holding a detached tree.
+        stateManager.session().addListener (this);
+        publishFxOrder();
     }
 
-    NacarProcessor::~NacarProcessor() = default;
+    NacarProcessor::~NacarProcessor()
+    {
+        stateManager.session().removeListener (this);
+    }
+
+    // -----------------------------------------------------------------------
+    //  FX chain order
+    // -----------------------------------------------------------------------
+    void NacarProcessor::publishFxOrder()
+    {
+        const auto chain = stateManager.session().getChildWithName (ids::FXCHAIN);
+
+        if (! chain.isValid())
+        {
+            engine.setFxOrder (FxOrder::defaultOrder());
+            return;
+        }
+
+        // `fxBypass` is written by the FX chain view under an identifier of its
+        // own because StateManager has none for it.  An unrecognised property
+        // round-trips through the session tree unchanged, so reading it back by
+        // name here is safe.
+        engine.setFxOrder (FxOrder::fromState (chain.getProperty (ids::fxOrder).toString(),
+                                               chain.getProperty ("fxBypass").toString()));
+    }
+
+    void NacarProcessor::valueTreePropertyChanged (juce::ValueTree& tree,
+                                                   const juce::Identifier& property)
+    {
+        if (tree.hasType (ids::FXCHAIN)
+            && (property == ids::fxOrder || property.toString() == "fxBypass"))
+            publishFxOrder();
+    }
+
+    void NacarProcessor::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&)       { publishFxOrder(); }
+    void NacarProcessor::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) { publishFxOrder(); }
+    void NacarProcessor::valueTreeChildOrderChanged (juce::ValueTree&, int, int)        {}
+    void NacarProcessor::valueTreeParentChanged (juce::ValueTree&)                      {}
+    void NacarProcessor::valueTreeRedirected (juce::ValueTree&)                         { publishFxOrder(); }
 
     // -----------------------------------------------------------------------
     //  Lifecycle
@@ -28,7 +74,7 @@ namespace nacar
             (juce::uint32) juce::jmax (1, getTotalNumOutputChannels())
         };
 
-        synth.prepare (sampleRate, spec.maximumBlockSize, (int) spec.numChannels);
+        engine.prepare (sampleRate, (int) spec.maximumBlockSize, (int) spec.numChannels);
 
         outputGain.prepare (spec);
         outputGain.setRampDurationSeconds (0.02);
@@ -47,7 +93,7 @@ namespace nacar
 
     void NacarProcessor::releaseResources()
     {
-        synth.reset();
+        engine.reset();
     }
 
     bool NacarProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -71,12 +117,23 @@ namespace nacar
     // -----------------------------------------------------------------------
     void NacarProcessor::pullTransportInfo()
     {
+        transport = TransportInfo();
+        transport.bpm = hostBpm.load (std::memory_order_relaxed);
+
         if (auto* ph = getPlayHead())
         {
             if (const auto pos = ph->getPosition())
             {
                 if (const auto bpm = pos->getBpm())
+                {
+                    transport.bpm = *bpm;
                     hostBpm.store (*bpm, std::memory_order_relaxed);
+                }
+
+                if (const auto ppq = pos->getPpqPosition())
+                    transport.ppqPosition = *ppq;
+
+                transport.playing = pos->getIsPlaying();
             }
         }
     }
@@ -100,7 +157,7 @@ namespace nacar
         // played by the host.
         keyboardState.processNextMidiBuffer (midi, 0, numSamples, true);
 
-        synth.process (buffer, midi, registry, hostBpm.load (std::memory_order_relaxed));
+        engine.process (buffer, midi, registry, transport);
 
         // -- output stage ---------------------------------------------------
         outputGain.setGainDecibels (registry.raw (PID::masterGain));
@@ -184,7 +241,7 @@ namespace nacar
 
     int NacarProcessor::getActiveVoiceCount() const noexcept
     {
-        return synth.getActiveVoiceCount();
+        return engine.getActiveVoiceCount();
     }
 
     void NacarProcessor::updateMeters (const juce::AudioBuffer<float>& buffer)
@@ -227,6 +284,11 @@ namespace nacar
     void NacarProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         stateManager.readFrom (data, sizeInBytes);
+
+        // The restore rewrites the session tree in place, which the listener
+        // above sees - but a host may also restore before the listener is
+        // attached, so the order is republished explicitly here too.
+        publishFxOrder();
     }
 
     juce::AudioProcessorEditor* NacarProcessor::createEditor()

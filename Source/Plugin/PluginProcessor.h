@@ -6,7 +6,7 @@
 
 #include "ParameterRegistry.h"
 #include "StateManager.h"
-#include "../Audio/Sources/Synth/SynthEngine.h"
+#include "../Audio/NacarEngine.h"
 
 namespace nacar
 {
@@ -21,7 +21,8 @@ namespace nacar
         and everything it calls obeys the realtime contract - no allocation, no
         locks, no file IO, no logging.
     */
-    class NacarProcessor : public juce::AudioProcessor
+    class NacarProcessor : public juce::AudioProcessor,
+                           private juce::ValueTree::Listener
     {
     public:
         NacarProcessor();
@@ -97,17 +98,31 @@ namespace nacar
         void pushScope (const juce::AudioBuffer<float>&) noexcept;
         void pullTransportInfo();
 
+        // The audio thread must never read a ValueTree, so the FX chain's order
+        // and bypasses are resolved here, on the message thread, whenever the
+        // session tree changes, and published to the engine as one packed
+        // integer.
+        void publishFxOrder();
+
+        void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+        void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
+        void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
+        void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override;
+        void valueTreeParentChanged (juce::ValueTree&) override;
+        void valueTreeRedirected (juce::ValueTree&) override;
+
         juce::AudioProcessorValueTreeState apvts;
         ParameterRegistry registry;
         StateManager stateManager;
 
-        SynthEngine synth;
+        NacarEngine engine;
 
         juce::MidiKeyboardState keyboardState;
         juce::dsp::Gain<float> outputGain;
 
         std::atomic<float> meter[2] { { 0.0f }, { 0.0f } };
         std::atomic<double> hostBpm { 120.0 };
+        TransportInfo transport;
 
         // Scope ring.  Interleaved stereo peaks, written by the audio thread.
         std::array<float, (size_t) scopeSize * 2> scope {};

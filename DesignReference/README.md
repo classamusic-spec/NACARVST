@@ -13,3 +13,10 @@ list of things that are locked against redesign. It is mirrored one-for-one by
 > already transcribed into `NACAR_UI_SPEC.md`, so the build does not depend on
 > the file being present; but reviewers of UI changes should compare against the
 > image itself, not only against the transcription.
+
+> **It is not currently present.** The approved image has only ever been
+> supplied as an attachment in conversation, so nothing in this repository can
+> open it. Anyone told to "look at the reference" will not find it. Until
+> somebody commits the file, `NACAR_UI_SPEC.md` is the working reference — and
+> section 12 of it, *How the reference is lit*, exists because that is the part
+> of the image a coordinate table cannot carry.

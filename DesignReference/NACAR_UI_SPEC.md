@@ -398,3 +398,83 @@ The following are locked for V1 and are not open to redesign:
 - AURA · SHADOW · BREATH · PATINA as the four right-hand modules
 - the five source modes and the five bottom nav pages
 - violet = active/selected, mint = powered/alive. Nothing else uses those hues.
+
+---
+
+## 12. How the reference is lit
+
+Section 1 lists the shading vocabulary. This section says how the approved
+image actually applies it, region by region, because that is the part a
+coordinate table cannot carry — and because the image itself is not currently
+in the repository (see `README.md`). It was written by reading the approved
+image directly.
+
+### The rule underneath all of it
+
+**One light, upper-left, about sixty degrees of elevation, and it never moves.**
+Expressed once in code as `theme::lightX` / `theme::lightY`, and every
+specular, bevel and contact shadow in the instrument derives from it. A panel
+of controls reads as machined metal only while they all agree about where the
+light is; one element lit from its own direction breaks the illusion for
+everything around it.
+
+Two consequences that are easy to get backwards:
+
+- **A raised object** is brightest on its upper-left edge and casts its shadow
+  down and to the right.
+- **A recess** is the inverse: darkest on the edge *nearest* the light, because
+  that is the wall the light cannot reach. A dark rectangle drawn on ceramic is
+  not a recess. An inner shadow under its top edge is.
+
+### Knobs
+
+Light ceramic caps, near-white at the upper-left falling to a warm grey at the
+lower-right — a point light inside the disc, not a linear ramp. Each cap sits
+in a visible darker seat ring, darkest on the upper-left side. The rim catches
+a bright thin highlight along the upper-left arc and loses it entirely on the
+lower-right. One thin dark indicator line runs from about 45 % of the radius to
+the edge. The contact shadow falls down and to the right. The violet value arc
+sits in a groove *outside* the cap, about 4 px wide, and glows into that groove
+rather than sitting on top of it. The small RANDOM knob is the dark variant:
+near-black cap, violet indicator.
+
+### Buttons and pills
+
+Corner radius about 8. Just off the surface: a thin bright top edge, a thin
+dark bottom edge, a small contact shadow, and — the detail that most separates
+a moulded object from a rectangle with a border — an inset highlight one pixel
+inside the top edge, which reads as the material's own thickness. A selected
+pill is brighter *and* sits slightly lower: pressed in, not merely tinted.
+
+MUTATE is the only element in the interface that emits light: a pale lilac fill
+lit from within, a violet border, and a small halo on the ceramic around it.
+AGAIN and PRINT are near-black glass — a dark control on a dark ground carries
+no information in its face, so all of it is in the edges.
+
+### Segmented controls and toggles
+
+A recessed track with the selected segment raised inside it. The contrast
+between the two is the whole effect, and it fails if the track is merely a
+darker fill. Toggles are the same at small scale: dark recessed track, light
+raised thumb with its own contact shadow.
+
+### The glass regions
+
+The viewport, the FX rack, the preset bar and the bottom nav slab are all
+cut-outs, not objects: inner shadow under the top edge, a 1 px `glass edge`
+hairline, and **no drop shadow**. The viewport is deeper at its centre than at
+its edges. Inside the rack, the cards are a shade lighter than the rack itself,
+which is what makes them read as seated *in* it.
+
+### What emits
+
+Only two things, and they must both genuinely glow rather than being drawn in a
+bright colour:
+
+- **Violet** — the active FX card's border and icon, the waveform, the value
+  arcs, the active generation dot, the parameter dots on the atmosphere
+  modules, MUTATE.
+- **Mint** — the power rings and the output meter, which reads as light inside
+  a dark channel.
+
+Everything else is lit; nothing else is a source.

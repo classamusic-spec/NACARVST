@@ -63,7 +63,9 @@ namespace nacar
         float scale      = 0.0f;   ///< World: size of the environment
         float distance   = 0.0f;   ///< World: how far away the source sits
         float wetBias    = 0.0f;   ///< World: an offset on atmospheric mixes
-        float widthScale = 1.0f;   ///< World + Pulse: multiplies stereo width
+        float widthScale = 1.0f;   ///< World: multiplies stereo width. Pulse's
+                                   ///< width duck is per-sample and is applied
+                                   ///< by the chain's output stage, not here.
         float alterAmount = 0.0f;  ///< Alter, straight through
 
         // -- Pulse destination depths ---------------------------------------

@@ -19,6 +19,7 @@
 #include "../Source/Audio/Sources/Synth/SynthEngine.h"
 #include "../Source/Audio/Sources/Synth/Halfband.h"
 #include "../Source/Audio/NacarEngine.h"
+#include "../Source/Audio/Modulation/ModulationEngine.h"
 
 using namespace nacar;
 
@@ -797,6 +798,302 @@ struct HalfbandTests : juce::UnitTest
 };
 
 // ===========================================================================
+//  Modulation
+//
+//  Breath's whole brief is that it must not repeat, and the specification is
+//  explicit that it is not another LFO.  That is a measurable property, so it
+//  is measured here rather than argued for: sixty seconds of output, then the
+//  autocorrelation at every lag a listener could notice.
+// ===========================================================================
+struct ModulationTests : juce::UnitTest
+{
+    ModulationTests() : juce::UnitTest ("Modulation", "nacar") {}
+
+    /** Renders `seconds` of the four modulation outputs into four vectors. */
+    struct Capture
+    {
+        std::vector<float> lfo1, lfo2, breath, pulse;
+    };
+
+    static Capture render (TestHost& host, double sampleRate, int blockSize,
+                           double seconds, bool transportPlaying = true)
+    {
+        ModulationEngine engine;
+
+        EngineSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maxBlockSize = blockSize;
+        spec.numChannels = 2;
+        engine.prepare (spec);
+
+        const int total = (int) (sampleRate * seconds);
+        Capture c;
+        c.lfo1.reserve ((size_t) total);
+        c.lfo2.reserve ((size_t) total);
+        c.breath.reserve ((size_t) total);
+        c.pulse.reserve ((size_t) total);
+
+        MacroState m;
+        resolveMacros (m, host.registry);
+
+        m.sampleRate = sampleRate;
+        m.hostBpm = 120.0;
+        m.transportPlaying = transportPlaying;
+
+        int position = 0;
+
+        while (position < total)
+        {
+            const int n = juce::jmin (blockSize, total - position);
+
+            m.numSamples = n;
+            engine.updateBlock (m, host.registry);
+
+            for (int i = 0; i < n; ++i)
+            {
+                c.lfo1.push_back (m.lfo1At (i));
+                c.lfo2.push_back (m.lfo2At (i));
+                c.breath.push_back (m.breathAt (i));
+                c.pulse.push_back (m.pulseAt (i));
+            }
+
+            m.ppqPosition += (double) n / sampleRate * (m.hostBpm / 60.0);
+            position += n;
+        }
+
+        return c;
+    }
+
+    /** Pearson autocorrelation of a mean-removed signal at one lag. */
+    static double autocorrelation (const std::vector<float>& x, int lag)
+    {
+        const int n = (int) x.size() - lag;
+
+        if (n <= 16)
+            return 0.0;
+
+        double mean = 0.0;
+        for (auto v : x)
+            mean += (double) v;
+
+        mean /= (double) x.size();
+
+        double num = 0.0, da = 0.0, db = 0.0;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const double a = (double) x[(size_t) i] - mean;
+            const double b = (double) x[(size_t) (i + lag)] - mean;
+
+            num += a * b;
+            da += a * a;
+            db += b * b;
+        }
+
+        const double denom = std::sqrt (da * db);
+        return denom < 1.0e-12 ? 0.0 : num / denom;
+    }
+
+    void runTest() override
+    {
+        constexpr double sr = 48000.0;
+
+        beginTest ("every modulation output respects its declared range");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::lfo1Depth, 1.0f);
+            host.registry.setFromUI (PID::lfo2Depth, 1.0f);
+            host.registry.setFromUI (PID::breathOn, 1.0f);
+            host.registry.setFromUI (PID::breathAmount, 1.0f);
+            host.registry.setFromUI (PID::pulseOn, 1.0f);
+            host.registry.setFromUI (PID::pulseDepth, 1.0f);
+
+            const auto c = render (host, sr, 256, 8.0);
+
+            for (const auto* pair : { &c.lfo1, &c.lfo2, &c.breath })
+                for (auto v : *pair)
+                {
+                    expect (std::isfinite (v), "a modulation output was not finite");
+                    expect (v >= -1.0001f && v <= 1.0001f,
+                            "a bipolar modulation output left -1..1: " + juce::String (v));
+                }
+
+            for (auto v : c.pulse)
+            {
+                expect (std::isfinite (v), "the pulse envelope was not finite");
+                expect (v >= -0.0001f && v <= 1.0001f,
+                        "the pulse envelope left 0..1: " + juce::String (v));
+            }
+        }
+
+        beginTest ("Breath does not repeat");
+        {
+            // Specification section 57: Breath is not another LFO.  If a
+            // listener can hear a period, it has failed - so no lag longer than
+            // a fraction of a second may correlate strongly with the start.
+            TestHost host;
+            host.registry.setFromUI (PID::breathOn, 1.0f);
+            host.registry.setFromUI (PID::breathAmount, 1.0f);
+            host.registry.setFromUI (PID::breathSpeed, 0.4f);
+            host.registry.setFromUI (PID::breathRandom, 0.6f);
+
+            const auto c = render (host, sr, 512, 60.0);
+
+            double worst = 0.0;
+            double worstLagSeconds = 0.0;
+
+            // Every lag from a quarter of a second to thirty, which is the span
+            // over which a repeat would read as a loop rather than as movement.
+            for (double lagSeconds = 0.25; lagSeconds <= 30.0; lagSeconds += 0.25)
+            {
+                const double r = std::abs (autocorrelation (c.breath, (int) (lagSeconds * sr)));
+
+                if (r > worst)
+                {
+                    worst = r;
+                    worstLagSeconds = lagSeconds;
+                }
+            }
+
+            logMessage ("    Breath worst autocorrelation: " + juce::String (worst, 3)
+                        + " at " + juce::String (worstLagSeconds, 2) + " s");
+
+            expect (worst < 0.75, "Breath repeats: correlation " + juce::String (worst, 3)
+                                      + " at a lag of " + juce::String (worstLagSeconds, 2)
+                                      + " s, which is a period a listener would hear");
+        }
+
+        beginTest ("Breath actually moves");
+        {
+            // The cheapest way to pass the test above is to output nothing.
+            TestHost host;
+            host.registry.setFromUI (PID::breathOn, 1.0f);
+            host.registry.setFromUI (PID::breathAmount, 1.0f);
+
+            const auto c = render (host, sr, 256, 20.0);
+
+            float lo = 1.0f, hi = -1.0f;
+            double sumSq = 0.0;
+
+            for (auto v : c.breath)
+            {
+                lo = juce::jmin (lo, v);
+                hi = juce::jmax (hi, v);
+                sumSq += (double) v * v;
+            }
+
+            const double rms = std::sqrt (sumSq / (double) juce::jmax<size_t> (1, c.breath.size()));
+
+            logMessage ("    Breath range " + juce::String (lo, 3) + " .. "
+                        + juce::String (hi, 3) + ", rms " + juce::String (rms, 3));
+
+            expect (hi - lo > 0.5f, "Breath barely moved: range " + juce::String (hi - lo, 3));
+            expect (rms > 0.05, "Breath is nearly silent: rms " + juce::String (rms, 3));
+        }
+
+        beginTest ("Breath is deterministic but an LFO is not mistaken for it");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::breathOn, 1.0f);
+            host.registry.setFromUI (PID::breathAmount, 1.0f);
+
+            const auto a = render (host, sr, 256, 6.0);
+            const auto b = render (host, sr, 256, 6.0);
+
+            expectEquals ((int) a.breath.size(), (int) b.breath.size());
+
+            for (size_t i = 0; i < a.breath.size(); ++i)
+                if (std::abs (a.breath[i] - b.breath[i]) > 1.0e-6f)
+                {
+                    expect (false, "Breath is not deterministic: diverged at sample "
+                                       + juce::String ((int) i));
+                    break;
+                }
+
+            // And for contrast: a sine LFO at the same nominal rate should
+            // correlate almost perfectly with itself one period later, which is
+            // what Breath must not do.
+            TestHost lfoHost;
+            lfoHost.registry.setFromUI (PID::lfo1Shape, 0.0f);
+            lfoHost.registry.setFromUI (PID::lfo1Depth, 1.0f);
+            lfoHost.registry.setFromUI (PID::lfo1Rate, 1.0f);
+
+            const auto l = render (lfoHost, sr, 256, 12.0);
+            const double periodic = std::abs (autocorrelation (l.lfo1, (int) sr));
+
+            logMessage ("    LFO autocorrelation at one period: "
+                        + juce::String (periodic, 3));
+
+            expect (periodic > 0.9, "the LFO is not periodic, which means this "
+                                    "comparison proves nothing about Breath");
+        }
+
+        beginTest ("Pulse ducks on the clock grid");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::pulseOn, 1.0f);
+            host.registry.setFromUI (PID::pulseDepth, 1.0f);
+            host.registry.setFromUI (PID::pulseSource, 0.0f);     // CLOCK
+            host.registry.setFromUI (PID::pulseDivision, 6.0f);   // 1/4
+            host.registry.setFromUI (PID::pulseAttack, 0.002f);
+            host.registry.setFromUI (PID::pulseRelease, 0.2f);
+
+            const auto c = render (host, sr, 256, 8.0);
+
+            float peak = 0.0f;
+            for (auto v : c.pulse)
+                peak = juce::jmax (peak, v);
+
+            expect (peak > 0.8f, "Pulse never ducked: peak " + juce::String (peak));
+
+            // At 120 BPM a quarter note is half a second, so eight seconds must
+            // contain about sixteen ducks.
+            int crossings = 0;
+            bool above = false;
+
+            for (auto v : c.pulse)
+            {
+                if (! above && v > 0.5f) { above = true; ++crossings; }
+                else if (above && v < 0.2f) { above = false; }
+            }
+
+            logMessage ("    Pulse ducks in 8 s at 120 BPM, 1/4: "
+                        + juce::String (crossings));
+
+            expect (crossings >= 14 && crossings <= 18,
+                    "Pulse fired " + juce::String (crossings)
+                        + " times where about 16 was expected");
+        }
+
+        beginTest ("modulation is independent of block size");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::breathOn, 1.0f);
+            host.registry.setFromUI (PID::breathAmount, 1.0f);
+            host.registry.setFromUI (PID::pulseOn, 1.0f);
+            host.registry.setFromUI (PID::pulseDepth, 1.0f);
+
+            const auto small = render (host, sr, 32, 4.0);
+            const auto large = render (host, sr, 1024, 4.0);
+
+            const int n = juce::jmin ((int) small.breath.size(), (int) large.breath.size());
+
+            double diff = 0.0;
+            for (int i = 0; i < n; ++i)
+                diff += std::abs ((double) small.breath[(size_t) i]
+                                  - (double) large.breath[(size_t) i]);
+
+            const double mean = diff / (double) juce::jmax (1, n);
+            logMessage ("    Breath mean difference across block sizes: "
+                        + juce::String (mean, 5));
+
+            expect (mean < 0.05, "Breath changed with block size: mean difference "
+                                     + juce::String (mean, 5));
+        }
+    }
+};
+
+// ===========================================================================
 //  The chain
 //
 //  Eleven engines in series, in an order the user can change at runtime.  These
@@ -1136,6 +1433,7 @@ struct ChainTests : juce::UnitTest
 };
 
 // ===========================================================================
+static ModulationTests     modulationTests;
 static ChainTests          chainTests;
 static HalfbandTests       halfbandTests;
 static ParameterTableTests parameterTableTests;

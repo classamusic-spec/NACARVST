@@ -167,7 +167,6 @@ namespace nacar
         // The output stage's band split, for the width destination.  Kept here
         // rather than in an engine because it is the chain's own last act.
         fx::ThreeBand widthSplitL, widthSplitR;
-        fx::OnePole pulseGainSmoother;
 
         // -------------------------------------------------------------------
         void prepare (double sampleRate, int maxBlock, int numChannels)
@@ -199,9 +198,6 @@ namespace nacar
             widthSplitL.prepare (140.0f, 2600.0f, spec.sampleRate);
             widthSplitR.prepare (140.0f, 2600.0f, spec.sampleRate);
 
-            pulseGainSmoother.setTime (0.002f, spec.sampleRate);
-            pulseGainSmoother.setValue (1.0f);
-
             prepared = true;
         }
 
@@ -226,8 +222,6 @@ namespace nacar
             stereo.clear();
             widthSplitL.reset();
             widthSplitR.reset();
-            pulseGainSmoother.reset();
-            pulseGainSmoother.setValue (1.0f);
         }
 
         // -------------------------------------------------------------------
@@ -283,14 +277,26 @@ namespace nacar
 
             const bool stereoOut = b.getNumChannels() > 1;
 
+            // MacroState carries the VOLUME envelope, which is the reference
+            // shape.  Width gets its own: specification section 83 is that a
+            // kick makes a sound quieter AND narrower AND darker AND drier, and
+            // the point of generating five differently-shaped envelopes is lost
+            // if the consumer applies one of them to two destinations.  The
+            // image recovers faster than the level does, and here is where that
+            // difference becomes audible.
+            const float* widthEnv =
+                modulation.pulseEnvelope (PulseEngine::Destination::width);
+
             for (int i = 0; i < numSamples; ++i)
             {
                 const float duck = m.pulseAt (i);
 
-                // Volume: smoothed, because the duck envelope is fast and an
-                // unsmoothed gain step at a block boundary is a click.
-                const float target = 1.0f - duck * m.pulseToVolume;
-                const float gain = pulseGainSmoother.process (juce::jlimit (0.0f, 1.0f, target));
+                // No smoothing here.  The envelope is already an envelope -
+                // shaped attack, shaped release, its own curve control - and a
+                // one-pole on top of it would quietly cap the attack at the
+                // smoother's own time constant, which is exactly the fast end
+                // of the control the user is reaching for.
+                const float gain = juce::jlimit (0.0f, 1.0f, 1.0f - duck * m.pulseToVolume);
 
                 if (! stereoOut)
                 {
@@ -304,8 +310,10 @@ namespace nacar
                 widthSplitL.split (l[i], lowL, midL, highL);
                 widthSplitR.split (r[i], lowR, midR, highR);
 
+                const float widthDuck = widthEnv != nullptr ? widthEnv[i] : duck;
+
                 const float width = juce::jlimit (0.0f, 2.0f,
-                                                  m.widthScale * (1.0f - duck * m.pulseToWidth));
+                                                  m.widthScale * (1.0f - widthDuck * m.pulseToWidth));
 
                 const float midMid  = (midL + midR) * 0.5f;
                 const float midSide = (midL - midR) * 0.5f * width;
@@ -332,13 +340,25 @@ namespace nacar
             if (numSamples <= 0)
                 return;
 
-            // Pulse can be triggered by MIDI.  The trigger lands at the top of
-            // the block rather than at the note's exact offset: CLOCK is the
-            // sample-accurate source, and a duck arriving a few milliseconds
-            // early reads as intent rather than as an error.
+            // Pulse's MIDI trigger, and the two live controllers the matrix
+            // needs.  The trigger carries its sample offset: quantising a duck
+            // to the top of the block is up to twenty-one milliseconds late at
+            // a 1024-sample buffer, which on a kick is the difference between a
+            // duck and a flam.
             for (const auto metadata : midi)
-                if (metadata.getMessage().isNoteOn())
-                    modulation.noteTriggered();
+            {
+                const auto message = metadata.getMessage();
+                const int offset = juce::jlimit (0, numSamples - 1, metadata.samplePosition);
+
+                if (message.isNoteOn())
+                    modulation.noteTriggeredAt (offset);
+                else if (message.isController() && message.getControllerNumber() == 1)
+                    modulation.setModWheel ((float) message.getControllerValue() / 127.0f);
+                else if (message.isChannelPressure())
+                    modulation.setAftertouch ((float) message.getChannelPressureValue() / 127.0f);
+                else if (message.isAftertouch())
+                    modulation.setAftertouch ((float) message.getAfterTouchValue() / 127.0f);
+            }
 
             // -- source ------------------------------------------------------
             const bool renderMono = buffer.getNumChannels() < 2;
@@ -444,4 +464,9 @@ namespace nacar
     }
 
     SynthEngine& NacarEngine::getSynth() noexcept { return impl->synth; }
+
+    void NacarEngine::rebuildModMatrix (const juce::ValueTree& tree)
+    {
+        impl->modulation.rebuildModMatrix (tree);
+    }
 }

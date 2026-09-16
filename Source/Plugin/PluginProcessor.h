@@ -103,6 +103,7 @@ namespace nacar
         // session tree changes, and published to the engine as one packed
         // integer.
         void publishFxOrder();
+        void publishModMatrix();
 
         void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
         void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;

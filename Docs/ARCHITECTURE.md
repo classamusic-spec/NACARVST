@@ -120,6 +120,11 @@ and on HiDPI.
 
 ```
 Source/Audio/
+  NacarEngine         the chain: owns every engine and routes between them
+  MacroResolver       what the five macro knobs mean to the engines
+  DspCommon.h         delay lines, allpasses, band splits, tilt, history
+  EngineContext.h     EngineSpec, MacroState, the engine convention
+
   Sources/Synth/      MIRAGE / HAZE / MASS over one core
   Sources/            SampleEngine, GrainSource, ResonatorEngine, SpectralEngine
   Memory/             the four generations
@@ -128,6 +133,64 @@ Source/Audio/
   Atmosphere/         Aura, Shadow, Patina
   Weight/             Sub / Body / Air
 ```
+
+Every engine offers exactly three methods — `prepare(EngineSpec)`, `reset()`,
+`process(buffer, registry, macros)` — and works in place on a stereo buffer.
+There is no base class: a virtual call per engine per block would cost nothing,
+but the uniformity is worth more as a rule people follow than as an interface
+the compiler enforces, and it keeps each engine's header free of anything but
+that engine.
+
+### The chain
+
+```
+SOURCE        the synth, and in later phases the four other source engines
+  → MEMORY       generational history
+  → FX CHAIN     retro, crush, filter, rewind, grain, space,
+                 in whatever order the user has put them
+  → SHADOW       an atmospheric duplicate of the finished sound
+  → AURA         the environment it all sits in
+  → PATINA       the surface it has ended up with
+  → WEIGHT       physical mass, last
+  → OUTPUT       Pulse's volume and width destinations
+```
+
+Memory is first because it is about what the *source* has been through — after
+the effects it would age the effects rather than the sound. Shadow duplicates
+the finished sound rather than the raw one, or it would be a duplicate of
+something nobody heard. Aura is the environment and so contains everything.
+Weight is last because it is the only stage whose job is the finished thing's
+physical size.
+
+The order is reorderable at runtime, so it crosses the thread boundary as a
+packed integer — six three-bit slot indices, a count and a bypass mask — written
+by the message thread and unpacked by the audio thread at the top of each block.
+The audio thread never reads a `ValueTree`.
+
+### Macros
+
+The five knobs on the left panel reach most of the instrument. `MacroResolver`
+converts what they *say* into a handful of named concepts — `age`, `grit`,
+`movement`, `scale`, `distance`, `wetBias`, `widthScale`, `alterAmount` — that
+an engine consults and **adds** to its own settings, so a patch that sets a
+control explicitly still wins.
+
+There is deliberately no central table mapping macro to parameter. It would put
+six engines' worth of voicing decisions in one file that nobody who works on
+those engines ever opens. Each engine documents its own macro response next to
+its code.
+
+### Pulse
+
+Specification §83: a kick makes a sound quieter **and** darker **and** narrower
+**and** drier at once. So Pulse generates five differently *shaped* envelopes
+from one trigger — the image recovers fastest, reverb tails stay masked longest
+— rather than one envelope scaled five ways.
+
+Volume and width are applied by the chain's output stage, because they are
+properties of the finished sound. Filter, space and memory are applied by the
+engines that own those behaviours, because a duck that darkens has to happen
+where the darkening happens.
 
 The synth is not three synthesizers. MIRAGE, HAZE and MASS share the entire
 core — oscillators, voice allocation, modulation, envelopes, filters, unison,

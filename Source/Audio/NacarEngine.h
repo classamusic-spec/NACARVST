@@ -115,6 +115,10 @@ namespace nacar
         /** Direct access for the parts of the UI that visualise the synth. */
         SynthEngine& getSynth() noexcept;
 
+        /** Rebuilds the modulation matrix from the session tree and publishes
+            it to the audio thread.  Message thread only. */
+        void rebuildModMatrix (const juce::ValueTree&);
+
     private:
         struct Impl;
         std::unique_ptr<Impl> impl;

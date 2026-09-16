@@ -18,6 +18,7 @@ namespace nacar
         // child would be left holding a detached tree.
         stateManager.session().addListener (this);
         publishFxOrder();
+        publishModMatrix();
     }
 
     NacarProcessor::~NacarProcessor()
@@ -46,19 +47,40 @@ namespace nacar
                                                chain.getProperty ("fxBypass").toString()));
     }
 
+    void NacarProcessor::publishModMatrix()
+    {
+        engine.rebuildModMatrix (stateManager.session().getChildWithName (ids::MODMATRIX));
+    }
+
     void NacarProcessor::valueTreePropertyChanged (juce::ValueTree& tree,
                                                    const juce::Identifier& property)
     {
         if (tree.hasType (ids::FXCHAIN)
             && (property == ids::fxOrder || property.toString() == "fxBypass"))
             publishFxOrder();
+
+        if (tree.hasType (ids::MODSLOT) || tree.hasType (ids::MODMATRIX))
+            publishModMatrix();
     }
 
-    void NacarProcessor::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&)       { publishFxOrder(); }
-    void NacarProcessor::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) { publishFxOrder(); }
+    void NacarProcessor::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&)
+    {
+        publishFxOrder();
+        publishModMatrix();
+    }
+
+    void NacarProcessor::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int)
+    {
+        publishFxOrder();
+        publishModMatrix();
+    }
     void NacarProcessor::valueTreeChildOrderChanged (juce::ValueTree&, int, int)        {}
     void NacarProcessor::valueTreeParentChanged (juce::ValueTree&)                      {}
-    void NacarProcessor::valueTreeRedirected (juce::ValueTree&)                         { publishFxOrder(); }
+    void NacarProcessor::valueTreeRedirected (juce::ValueTree&)
+    {
+        publishFxOrder();
+        publishModMatrix();
+    }
 
     // -----------------------------------------------------------------------
     //  Lifecycle
@@ -287,8 +309,9 @@ namespace nacar
 
         // The restore rewrites the session tree in place, which the listener
         // above sees - but a host may also restore before the listener is
-        // attached, so the order is republished explicitly here too.
+        // attached, so both are republished explicitly here too.
         publishFxOrder();
+        publishModMatrix();
     }
 
     juce::AudioProcessorEditor* NacarProcessor::createEditor()

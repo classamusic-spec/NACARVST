@@ -112,16 +112,16 @@ filter's corner falls with a 3 ms level follower, which is dynamic HF loss on
 sustained material and transient rounding on an attack out of one mechanism.
 
 WEAR is a memoryless scheduler at a 32-sample control rate: `wear^1.7 × 4.5` events
-per second, each 8–200 ms, a little over half on one channel only, reaching their
-gain and HF trim through 6 ms one-poles so an event cannot click. Under it a 0.4 s
-random walk per channel pulls one channel's top end against the other — azimuth,
-which only ever *trims*, because a misaligned head gap cannot add high end.
+per second, each 8–200 ms, a little over half on one channel only, reaching their gain
+and HF trim through 6 ms one-poles so an event cannot click. Under it a 0.4 s random
+walk per channel pulls one channel's top end against the other — azimuth, which only
+ever *trims*, because a misaligned head gap cannot add high end.
 
-The noise takes the era's colour and is **not ducked when the music plays**:
-ducking a noise floor is a gate and a medium has no gate. What is modelled instead
-is tape's modulation noise, which rises with recorded level. Crackle is generated
-impulses through the same band pass — no vinyl sample, no static loop — and rumble
-is generated once and added identically to both channels.
+The noise takes the era's colour and is **not ducked when the music plays**: ducking a
+noise floor is a gate and a medium has no gate. What is modelled instead is tape's
+modulation noise, rising with recorded level. Crackle is generated impulses through the
+same band pass — no vinyl sample, no static loop — and rumble is generated once and
+added identically to both channels.
 
 **Macros.** `age` → +0.25 AGE and +0.30 WEAR; `grit` → +0.25 NOISE and 0.30 of the
 saturation drive term; `movement` → +0.30 DRIFT; `alterAmount` → up to +0.34 ERA,
@@ -226,19 +226,17 @@ as crossfading two taps of one filter. It is equal power because adjacent respon
 are partially complementary and a linear crossfade of a complementary pair loses 6 dB
 in the middle.
 
-MOTION is self-modulation, explicitly not an LFO. Four sources sum and none
-dominates: Breath (0.42), two incommensurate slow sines at 0.063 and 0.101 Hz (0.33),
-a random walk with a new target every 64 samples through a 0.9 s one-pole (0.25), and
-— added separately — a 30 ms follower on the previous output that opens the filter as
-the material gets louder. That last path is feedback and is bounded on purpose: the
-follower is clamped to [0, 1] and scaled to at most 0.6 octave, the assembled cutoff
-is clamped in the log domain to [20 Hz, 20 kHz] before it becomes a coefficient, and
-`SynthFilter` clamps again to 0.45 of Nyquist. MOTION also drives the vowel position,
-so a FORMANT patch travels through vowels instead of sitting on one.
-
-Drive is applied here rather than through `SynthFilter::setDrive`, whose internal
-drive switches on at a threshold and therefore steps as the control leaves zero; the
-blend is continuous and has unit small-signal gain.
+MOTION is self-modulation, explicitly not an LFO. Four sources sum and none dominates:
+Breath (0.42), two incommensurate slow sines at 0.063 and 0.101 Hz (0.33), a random walk
+with a new target every 64 samples through a 0.9 s one-pole (0.25), and — separately — a
+30 ms follower on the previous output that opens the filter as the material gets louder.
+That last path is feedback and is bounded on purpose: the follower is clamped to [0, 1]
+and scaled to at most 0.6 octave, the cutoff is assembled and clamped in the log domain
+to [20 Hz, 20 kHz] before it becomes a coefficient, and `SynthFilter` clamps again to
+0.45 of Nyquist. MOTION also drives the vowel position, so a FORMANT patch travels
+through vowels instead of sitting on one. Drive is applied here rather than through
+`SynthFilter::setDrive`, whose internal drive switches on at a threshold and therefore
+steps as the control leaves zero.
 
 **Macros.** `movement` → +0.30 MOTION; `breath` → one of the four motion sources;
 `pulseToFilter × pulse` → up to −1.8 octaves of cutoff per pulse, §83's "a kick makes
@@ -338,9 +336,9 @@ SCATTER closes. FREE mode bypasses the table and uses `grain_pitch` plus ±50 ce
 
 `root_note` and `scale_type` both have AUTO and there is no analysis engine yet, so AUTO
 resolves to C and to MINOR here — minor because a minor third over major material is a
-colour and a major third over minor material is a mistake. `root_note` is then
+colour and a major third over minor material is a mistake. `root_note` is then read and
 deliberately **not used**: a grain's transposition is relative to whatever the material
-already is, so the tonic's pitch class cannot change which intervals are in key.
+already is, so the tonic cannot change which intervals are in key.
 
 **Gain staging** is this engine's §148 section: density must mean density, not volume.
 Expected overlap is `DENSITY × SIZE`, and the normalisation is the
@@ -429,9 +427,9 @@ The five characters are five configurations of the network, not one reverb with 
 ROOM uses only two of the four diffusers so its early field stays discrete, DARK damps at
 2.4 kHz inside the loop, INFINITE pins the feedback at 0.99997 and trims the input to 0.22
 so the network fills rather than floods. RT60 is clamped to [0.08, 28] s and the per-line
-gain to 0.9992. A soft ceiling inside the loop is exactly transparent below 1.5 and
-asymptotes to 3.0, turning INFINITE from something that accumulates without bound into
-something that fills and holds.
+gain to 0.9992, and a soft ceiling inside the loop — transparent below 1.5, asymptotic to
+3.0 — turns INFINITE from something that accumulates without bound into something that
+fills and holds.
 
 **Macros.** `scale` → +0.30 SIZE; `distance` → +0.35 DISTANCE — and because DISTANCE is
 the cue set above rather than a wet control, World is not mapped to wet level, which §73
@@ -524,11 +522,10 @@ drives it directly.
 * **Nobody has listened to any of this.** Everything above is a claim about what the code
   does. No build has been auditioned, nothing measured, no engine A/B'd against a reference.
 * **Retro's bypass edge steps by 4 ms in time, in both directions, and the mix ramp cannot fix
-  it.** The bypassed path is the undelayed input; the active path's dry tap is the input
-  delayed by the nominal offset. The ramp removes the wet/dry step, but at the block where the
-  early-out engages or releases the output jumps between `x[n]` and `x[n-192]`. Crush has the
-  same defect at 9 samples, where it is unlikely to matter. Retro also emits 4 ms of silence
-  after `prepare()` or `reset()`.
+  it.** The bypassed path is the undelayed input; the active path's dry tap is delayed by the
+  nominal offset, so at the block where the early-out engages or releases the output jumps
+  between `x[n]` and `x[n-192]`. Crush has the same defect at 9 samples. Retro also emits 4 ms
+  of silence after `prepare()` or `reset()`.
 * **Space's off edge is not ramped.** It flushes the network and returns in the same block, so
   the tail disappears in one sample and the dry gain jumps from the mix's dry leg to unity. The
   other five ramp their mix to zero before they early-out; Space does not.
@@ -541,46 +538,45 @@ drives it directly.
   routing that targets an FX power flag is silently discarded.
 * **Retro's resampling grid aliases and is not oversampled.** Deliberate — it is what a 26 kHz
   12-bit sampler did — but ERA near 1 is not a clean stage, and the grid crossfades with the
-  un-held signal as ERA morphs into it rather than the converter's rate sliding, which is not
-  something any real machine does. The dropout scheduler is memoryless, so two events can
-  overlap and read as one longer event. The ACETATE end's mono collapse reduces width: safe
-  under §38/40/43, but a patch that needs its width back has to keep ERA below about 0.2.
+  un-held signal as ERA morphs into it rather than the converter's rate sliding, which no real
+  machine does. The dropout scheduler is memoryless, so two events can overlap. The ACETATE
+  end's mono collapse reduces width: safe under §38/40/43, but a patch that needs its width
+  back has to keep ERA below about 0.2.
 * **Crush's bit depth is a block-rate constant**, so fast BITS automation moves in block-sized
   steps — steps in the step size, not in the signal, so they do not click, but a fast sweep is
   not smooth. The oversampled drive path runs even at DRIVE 0 so the latency does not move with
   a parameter. At 1 bit the quantiser has three levels (−1, 0, +1), not two.
 * **Filter's MORPH wraps from FORMANT back to LP**, which is consistent but not obvious. Filter
   B runs only above MORPH 1e-4, so the first samples after MORPH leaves zero are a filter
-  starting from rest; its gain there is exactly zero, so nothing stale is heard. Each
-  `SynthFilter` carries a 16 KB comb buffer whether or not the comb is selected, so the engine
-  is about 66 KB of object. MOTION at full depth with RES near maximum sweeps a resonant peak
-  across two octaves: nothing is unstable, but it is loud.
+  starting from rest (its gain there is zero, so nothing stale is heard). Each `SynthFilter`
+  carries a 16 KB comb buffer whether or not the comb is selected, so the engine is about 66 KB
+  of object. MOTION at full depth with RES near maximum sweeps a resonant peak across two
+  octaves: stable, but loud.
 * **Rewind has no UI or MIDI one-shot trigger.** There is no parameter for one, so it is absent
   rather than invented. Its history reads are linear-interpolated, so a fractional playback rate
   loses a little top end; it is not a transparent varispeed. A REVERSE gesture is shortened at
-  high SPEED because the tap digs back at `1 + SPEED` samples per sample. SPEED means "playback
-  rate" in REVERSE and RETURN but "how fast the gesture happens" in STOP and DIVE — one control,
-  two meanings.
+  high SPEED, because the tap digs back at `1 + SPEED` samples per sample. SPEED means "playback
+  rate" in REVERSE and RETURN but "how fast the gesture happens" in STOP and DIVE.
 * **Grain's reads are linearly interpolated**, which above about +12 semitones is audible as a
   dull top end; `HistoryBuffer` has no Hermite read although `DelayLine` does. Its pitch
   quantisation is relative, not key-aware: a fixed transposition cannot be diatonic for every
   note it is applied to. FREEZE takes 78 ms to engage. The gain law assumes every scheduled
-  grain sounds, so dropped grains make the texture quieter than the normalisation expects.
-  Grains still in flight are cut mid-window when the mix ramp finally reaches zero.
+  grain sounds, so dropped grains make the texture quieter than it expects, and grains still in
+  flight are cut mid-window when the mix ramp reaches zero.
 * **Space's wet level has never been calibrated** against any reference. Changing SIZE or
   PRE-DELAY sweeps the delay reads rather than crossfading between two of them, so a fast move
   glides the tail's pitch. The early reflection pattern is a fixed synthetic tap list, not an
-  image-source model. Eight lines is a modest modal density: above about 2.5× scale the tail
-  thins.
+  image-source model, and eight lines is a modest modal density: above about 2.5× scale the
+  tail thins.
 * **The quality parameter (ECO / STUDIO / ULTRA) is ignored by all six engines**, and **CPU has
   not been measured** for any of them: the synth core has a benchmark, the FX chain does not.
   Grain's cost is proportional to sounding grains — 40 at the top of DENSITY and SIZE — and
   there is no SIMD anywhere in the chain.
-* **The chain tests in `Tests/Main.cpp` cover composition, not character:** order packing,
-  parser robustness, that a silent chain leaves the mid signal within −60 dB of the bare synth,
-  that everything-on at four sample rates stays finite and under a peak of 8, that twelve random
-  orders render, and the low-band correlation test above. They do not check any engine's
-  algorithm, and none of them was run for this document.
+* **The chain tests in `Tests/Main.cpp` cover composition, not character:** order packing, parser
+  robustness, a silent chain leaving the mid signal within −60 dB of the bare synth, everything-on
+  at four sample rates staying finite and under a peak of 8, twelve random orders rendering, and
+  the low-band correlation test above. They do not check any engine's algorithm, and none of them
+  was run for this document.
 * **This subsystem is not production-ready.** It contains no placeholder engines — all six do
   what they claim — but Retro's 4 ms bypass step, Space's unramped off edge and the removed-slot
   case are defects a user could find in a first session, and nothing here has been heard.

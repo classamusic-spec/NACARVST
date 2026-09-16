@@ -98,23 +98,28 @@ namespace nacar
             that is only a volume duck is the thing specification section 83
             says not to build.  `MacroState::pulse` is the VOLUME envelope - the
             reference shape - and an engine that wants the filter, space, width
-            or memory envelope asks for it here.  Nothing does yet. */
+            or memory envelope asks for it here.  The chain's output stage uses
+            the WIDTH envelope; the other three are unclaimed. */
         const float* pulseEnvelope (PulseEngine::Destination) const noexcept;
 
         /** Live performance controllers, for the matrix's MOD WHEEL and
-            AFTERTOUCH sources.  NOTHING CALLS THESE: the engine is not handed
-            the MidiBuffer, so both read zero and those two matrix sources are
-            inert.  They are here rather than faked. */
+            AFTERTOUCH sources.  NacarEngine::process calls these from the
+            MidiBuffer: CC 1 for the wheel, and channel pressure or polyphonic
+            aftertouch, whichever the controller sends, for the other. */
         void setModWheel (float zeroToOne) noexcept;
         void setAftertouch (float zeroToOne) noexcept;
 
         /** Rebuilds the routing array from the session tree and publishes it to
-            the audio thread.  Message thread only.  NOTHING CALLS THIS YET. */
+            the audio thread.  Message thread only.  NacarProcessor calls this
+            whenever the MODMATRIX branch of the session changes. */
         void rebuildModMatrix (const juce::ValueTree& modMatrixTree);
 
         /** Total modulation offset for a parameter this block, in normalised
-            units, -1..1.  Audio thread, valid after updateBlock().  NOTHING
-            CALLS THIS YET - every engine still reads its parameters directly. */
+            units, -1..1.  Audio thread, valid after updateBlock().
+
+            NacarEngine turns these into ParameterRegistry's modulation overlay
+            once per block, which is why no individual engine has to know the
+            matrix exists: they read `p.raw()` and get the modulated value. */
         float modulationFor (PID) const noexcept;
 
         const ModMatrix& matrix() const noexcept { return modMatrix; }

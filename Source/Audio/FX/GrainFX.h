@@ -53,15 +53,29 @@ namespace nacar
             safe to start and finish without reference to any parameter. */
         struct Grain
         {
-            float position   = 0.0f;   ///< absolute read index, fractional
-            float increment  = 1.0f;   ///< signed: negative plays backwards
-            float phase      = 0.0f;   ///< 0..1 through the window
-            float phaseInc   = 0.0f;   ///< 1 / length in samples
-            float gainL      = 0.0f;
-            float gainR      = 0.0f;
-            int   window     = kHann;
-            bool  fromFreeze = false;
-            bool  active     = false;
+            /*  `cursor` means two different things, and which one is decided
+                once at spawn and never again:
+
+                  live grain    samples behind the history's write head, so
+                                cursorDelta is (1 - readRate) - the write head
+                                moves too, exactly as in RewindEngine.
+                  freeze grain  an index into the freeze store, which nothing
+                                is writing to, so cursorDelta is the read rate
+                                itself.
+
+                Keeping a live grain's cursor as a *delay* rather than as an
+                absolute ring index matters for precision: a delay near the
+                write head is a small number, and a float's fractional
+                resolution at 10^5 is already only 1/64 of a sample.          */
+            float cursor      = 0.0f;
+            float cursorDelta = 0.0f;
+            float phase       = 0.0f;   ///< 0..1 through the window
+            float phaseInc    = 0.0f;   ///< 1 / length in samples
+            float gainL       = 0.0f;
+            float gainR       = 0.0f;
+            int   window      = kHann;
+            bool  fromFreeze  = false;
+            bool  active      = false;
         };
 
         /** The weighted transposition table, rebuilt once per block. */
@@ -72,7 +86,7 @@ namespace nacar
 
             float cumulative[kSize] {};   ///< running sum; last entry is the total
             float unisonShare = 1.0f;     ///< P(0 semitones), used by the gain law
-            int   count = 0;
+            bool  unquantised = false;    ///< FREE mode bypasses the table
         };
 
         void buildWindows();
@@ -84,13 +98,14 @@ namespace nacar
                           float direction, float widthScale, int windowIndex,
                           float freeSemis, float scatter, float alter) noexcept;
 
-        forcedinline void readFreeze (float pos, float& l, float& r) const noexcept;
+        void readFreeze (float pos, float& l, float& r) const noexcept;
 
         // -- fixed configuration ----------------------------------------------
         double sampleRate = 48000.0;
         int    maxBlock = 512;
         float  historySamples = 1.0f;     ///< usable span of the history ring
         int    freezeLength = 1;          ///< samples in the freeze store
+        float  panTrim = 1.0f;            ///< makes a centred grain exactly unity
 
         // -- storage (all allocated in prepare, never afterwards) -------------
         fx::HistoryBuffer history;
@@ -113,8 +128,9 @@ namespace nacar
         int   freezeSourceStart = 0;  ///< ring index the copy started from
 
         // -- feedback ------------------------------------------------------------
-        float fbL = 0.0f, fbR = 0.0f;
+        float fbL = 0.0f, fbR = 0.0f;     ///< the limited signal fed back
         float fbPeak = 0.0f;
+        float fbAttack = 0.1f, fbRelease = 0.001f;
         fx::OnePoleTPT fbLpL, fbLpR;
         fx::DcBlocker  fbDcL, fbDcR;
 

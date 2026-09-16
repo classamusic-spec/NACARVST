@@ -41,12 +41,14 @@ namespace nacar::memory
         cheaper than retuning a filter per sample. */
     inline constexpr int kControlInterval = 32;
 
-    /** The band split used by every stereo-affecting stage.
+    /** 165 Hz is where the low end becomes untouchable.  It sits deliberately
+        above the 130 Hz at which the synth already collapses to mono, so the
+        band Memory protects is strictly wider than the band the source made
+        mono.  It is the corner of the side-signal high pass that makes that
+        protection exact, and the lower corner of the three-band split.
 
-        165 Hz sits deliberately above the 130 Hz at which the synth already
-        collapses to mono, so the band Memory is forbidden to touch is strictly
-        wider than the band the source made mono.  2.6 kHz separates "body" from
-        "air" for the harmonic colouration and the decorrelation weighting. */
+        2.6 kHz separates body from air, which is what the harmonic colouration
+        needs: its products belong in the body of the sound, not in the top. */
     inline constexpr float kLowSplitHz  = 165.0f;
     inline constexpr float kHighSplitHz = 2600.0f;
 
@@ -80,7 +82,7 @@ namespace nacar::memory
         float diffusion;         ///< 0..1 scaling of the common allpass chain
 
         // 7  stereo coherence
-        float decorrelation;     ///< 0..1, mid and high only
+        float decorrelation;     ///< 0..1 of the allpass pair's coefficient
 
         // 8  harmonic colouration
         float colourEven;        ///< second-harmonic weight
@@ -211,11 +213,11 @@ namespace nacar::memory
             fx::Allpass diffuse[3];
 
             // band work
-            fx::ThreeBand  split;
-            fx::DelayLine  lowAlign;    ///< keeps the low band level with the mid path
-            fx::DelayLine  midDelay;    ///< 5b differential drift, mid and high only
-            fx::Allpass    decor[2];    ///< 7 stereo decorrelation, mid and high only
+            fx::ThreeBand  split;       ///< 8 only: the colouration needs a body band
+            fx::DelayLine  driftDelay;  ///< 5b the differential half of the drift
+            fx::Allpass    decor[2];    ///< 7 stereo decorrelation
             fx::OnePole    colourEnv;   ///< 8 normalises the harmonic ratio
+            fx::DcBlocker  colourDc;    ///< 8 the even term has a mean; this removes it
             fx::OnePoleTPT holeLo, holeHi;   ///< generation IV spectral hole
             fx::Tilt       tilt;        ///< 9 spectral aging
 
@@ -234,9 +236,7 @@ namespace nacar::memory
 
             // control-rate coefficients
             float satDrive = 1.0f, satBias = 0.0f, satOffset = 0.0f, satScale = 1.0f;
-            float noiseGain = 0.0f, asymGain = 1.0f, midDelaySamples = 0.0f;
-
-            float decorDelay[2] { 7.0f, 11.0f };
+            float noiseGain = 0.0f, asymGain = 1.0f, driftSamples = 0.0f;
         };
 
         void updateControl (const StageSettings&, float pulse, float breath) noexcept;
@@ -292,7 +292,7 @@ namespace nacar::memory
 
         // constants derived in prepare()
         float wobbleBase = 48.0f, wobbleMaxDepth = 40.0f;
-        float midBase = 32.0f, midMaxDepth = 24.0f;
+        float driftBase = 32.0f, driftMaxDepth = 24.0f;
         float rateScale = 1.0f;          ///< sampleRate / 48000, for the decimator
         float controlRate = 1500.0f;     ///< sampleRate / kControlInterval
 

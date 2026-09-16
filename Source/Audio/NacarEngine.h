@@ -112,6 +112,10 @@ namespace nacar
         int getActiveVoiceCount() const noexcept;
         float getLastPeak() const noexcept;
 
+        /** Samples of latency the chain currently adds.  Changes as modules are
+            switched on and off; the processor reports it to the host. */
+        int getLatencySamples() const noexcept;
+
         /** Direct access for the parts of the UI that visualise the synth. */
         SynthEngine& getSynth() noexcept;
 

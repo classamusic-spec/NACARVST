@@ -37,8 +37,10 @@
 
     The split is fx::ThreeBand with fx::TwoBand inside its mid band.  Both are
     complementary TPT one-poles, so low + lowMid + upperMid + high reconstructs
-    the input exactly: with every profile gain at 1 and every control at 0 the
-    stage is transparent by construction rather than by trimming.
+    the input: with every profile gain at 1 and every control at 0 the stage is
+    transparent by construction rather than by trimming.  Reconstruction is
+    exact to within one float ulp - about 1.5e-8, or -153 dB - not bitwise.
+    The bit-exact path is the early-out below.
 
     WEAR IS EROSION OF DETAIL, NOT DAMAGE.  Three mechanisms, all confined to
     the top half of the spectrum:

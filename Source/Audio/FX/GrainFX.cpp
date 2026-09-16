@@ -1,5 +1,8 @@
 #include "GrainFX.h"
 
+#include <algorithm>
+#include <initializer_list>
+
 /*
     ======================================================================
     GRAIN
@@ -35,6 +38,11 @@
     and read the oldest material in the ring - a hard discontinuity in the
     middle of a grain.  If the requested span cannot fit at all, the grain is
     dropped.
+
+    INTEGRATION NOTE.  Grain must be given every block, including blocks in
+    which grainfx_on is false or the slot is bypassed, or its history goes
+    stale.  The engine bypasses itself internally and is bit-exact when idle,
+    so calling it unconditionally costs one circular write per sample.
 
     ----------------------------------------------------------------------
     POOL EXHAUSTION
@@ -274,6 +282,9 @@
                           non-repeating and the read position is a slow
                           parameter, which is the only kind it is allowed near.
 
+    grainfx_on is read here as well as by the chain, so that the history keeps
+    being written while the module is switched off.
+
     Deliberately unused: age and grit (Grain is not a wear effect - Retro,
     Crush and Patina are), wetBias (World's offset belongs on atmospheric
     mixes, and Grain is not one), the Pulse destinations (Pulse's width and
@@ -312,6 +323,14 @@
         respect: a grain always starts on a sample boundary, so at very high
         densities the timing quantises to 1 sample.  That is inaudible at any
         density this module offers.
+      * The gain law assumes every scheduled grain sounds.  Grains that are
+        dropped - an exhausted pool, or a span that will not fit in the buffer
+        at an extreme of SIZE and PITCH, which the 2.5 s freeze store reaches
+        sooner than the 5.5 s history does - make the texture quieter than the
+        normalisation expects.  With a pool of 96 against a worst case of 40
+        that is rare, but it is not impossible.
+      * The 2x clamp on the normalisation gain binds for PERCUSSIVE and EXPO at
+        low density, as described under GAIN STAGING.
       * There is no grain-level envelope follower, so FEEDBACK at maximum with
         a very short SIZE will sound compressed rather than exploding - the
         limiter is doing exactly its job, but it is doing it audibly.
@@ -488,5 +507,630 @@ namespace nacar
             windowMean[(size_t) w] = juce::jmax (0.02f, (float) (sum / (double) N));
             windowRms [(size_t) w] = juce::jmax (0.02f, (float) std::sqrt (sumSq / (double) N));
         }
+    }
+
+    void GrainFX::prepare (const EngineSpec& spec)
+    {
+        sampleRate = juce::jmax (8000.0, spec.sampleRate);
+        maxBlock   = juce::jmax (1, spec.maxBlockSize);
+
+        history.prepare (sampleRate, kHistorySeconds);
+
+        // Sixteen samples of margin: HistoryBuffer::read() reaches one sample
+        // further back than the delay it is given, and a grain must never read
+        // across the write head.
+        historySamples = (float) juce::jmax (64, history.capacity() - 16);
+
+        freezeLength = juce::jmax (1024, (int) (sampleRate * kFreezeSeconds));
+        freezeL.assign ((size_t) freezeLength + 2, 0.0f);
+        freezeR.assign ((size_t) freezeLength + 2, 0.0f);
+
+        buildWindows();
+
+        bandL.prepare (kLowSplitHz, kHighSplitHz, sampleRate);
+        bandR.prepare (kLowSplitHz, kHighSplitHz, sampleRate);
+
+        fbLpL.setCutoff (kFeedbackLpHz, sampleRate);
+        fbLpR.setCutoff (kFeedbackLpHz, sampleRate);
+        fbDcL.prepare (sampleRate);
+        fbDcR.prepare (sampleRate);
+
+        // The house pan law is the -4.5 dB compromise, which puts a centred
+        // source at 0.5946 per channel.  Trimming by its own centre value is
+        // what makes SPREAD at zero exactly transparent; the 1.5 dB that full
+        // spread then adds is the compromise law behaving as designed, and is
+        // the same behaviour unison spread has in the synth core.
+        float centreL = 1.0f, centreR = 1.0f;
+        fx::panGains (0.0f, centreL, centreR);
+        panTrim = 1.0f / juce::jmax (0.1f, centreL);
+
+        fbAttack  = 1.0f - std::exp (-1.0f / (float) (0.005 * sampleRate));
+        fbRelease = 1.0f - std::exp (-1.0f / (float) (0.400 * sampleRate));
+
+        reset();
+    }
+
+    void GrainFX::reset()
+    {
+        history.reset();
+
+        std::fill (freezeL.begin(), freezeL.end(), 0.0f);
+        std::fill (freezeR.begin(), freezeR.end(), 0.0f);
+
+        for (auto& g : grains)
+            g = Grain {};
+
+        activeGrains = 0;
+        untilNextGrain = 0.0f;
+
+        freezeHeld = false;
+        freezeReady = false;
+        freezeFill = 0;
+        freezeSourceStart = 0;
+
+        fbL = fbR = 0.0f;
+        fbPeak = 0.0f;
+        fbLpL.reset(); fbLpR.reset();
+        fbDcL.reset(); fbDcR.reset();
+
+        bandL.reset(); bandR.reset();
+
+        prevMix = 0.0f;
+
+        pitchTable = PitchTable {};
+        pitchTable.cumulative[PitchTable::kSpan] = 1.0f;
+
+        for (int k = PitchTable::kSpan + 1; k < PitchTable::kSize; ++k)
+            pitchTable.cumulative[k] = 1.0f;
+    }
+
+    void GrainFX::readFreeze (float pos, float& l, float& r) const noexcept
+    {
+        const float p = juce::jlimit (0.0f, (float) (freezeLength - 2), pos);
+        const int   i = (int) p;
+        const float f = p - (float) i;
+
+        l = fx::lerp (freezeL[(size_t) i], freezeL[(size_t) (i + 1)], f);
+        r = fx::lerp (freezeR[(size_t) i], freezeR[(size_t) (i + 1)], f);
+    }
+
+    // =======================================================================
+    //  The weighted transposition distribution.  Section 119: weighted, never
+    //  uniform.  Rebuilt once per block, which is 25 iterations of arithmetic
+    //  and no allocation.
+    // =======================================================================
+    void GrainFX::buildPitchTable (int pitchMode, int scaleType, int harmonyMode,
+                                   float scatter, float alter) noexcept
+    {
+        pitchTable.unquantised = (pitchMode >= 6);      // FREE
+
+        const int mask  = kScaleMasks[juce::jlimit (0, 9, scaleType)];
+        const int chord = chordMask (mask);
+        const int third = scaleThird (mask);
+
+        // SCATTER collapses the distribution onto unison as it closes.
+        const float scatterPow = powApprox (juce::jlimit (0.0f, 1.0f, scatter), 1.5f);
+
+        // MACRO: Alter opens the tiers harmony_mode has closed, as a fade
+        // rather than as a switch.
+        const float a = juce::jlimit (0.0f, 1.0f, alter);
+        const float alterGain = a * a;
+
+        const int harmonyTier = juce::jlimit (0, 2, harmonyMode);
+
+        float total = 0.0f;
+        float unison = 0.0f;
+
+        for (int k = 0; k < PitchTable::kSize; ++k)
+        {
+            const int semis = k - PitchTable::kSpan;            // -12 .. +12
+            const int pc = ((semis % 12) + 12) % 12;            // interval class
+            const bool inScale = (mask  & (1 << pc)) != 0;
+            const bool isChord = (chord & (1 << pc)) != 0;
+
+            float weight = 0.0f;
+            int   tier = 2;
+
+            // Section 119, literally: very common 0, common +-12, moderate
+            // fifth, contextual chord tones, rare other scale tones.
+            if      (semis ==   0) { weight = 100.0f; tier = 0; }
+            else if (semis ==  12) { weight =  30.0f; tier = 0; }
+            else if (semis == -12) { weight =  26.0f; tier = 0; }
+            else if (semis ==   7) { weight =  13.0f; tier = 0; }
+            else if (semis ==  -7) { weight =   9.0f; tier = 0; }
+            else if (isChord)      { weight = (semis > 0 ? 6.0f : 4.0f);  tier = 0; }
+            else if (inScale)      { weight = (semis > 0 ? 1.6f : 1.2f);  tier = 1; }
+            else                   { weight =   0.5f; tier = 2; }
+
+            // Which candidates this pitch mode allows at all.
+            const int absSemis = std::abs (semis);
+            bool allowed = false;
+
+            switch (pitchMode)
+            {
+                case 0:  allowed = (semis == 0); break;                              // ROOT
+                case 1:  allowed = (semis == 0 || absSemis == 12); break;            // OCTAVE
+                case 2:  allowed = (semis == 0 || absSemis == 7 || absSemis == 12); break;   // FIFTH
+                case 3:  allowed = (semis == 0 || absSemis == third || absSemis == 12); break; // THIRD
+                case 4:  allowed = inScale; break;                                   // SCALE
+                case 5:  allowed = true; break;                                      // CHROMATIC
+                default: allowed = (semis == 0); break;                              // FREE: unused
+            }
+
+            if (! allowed)
+                weight = 0.0f;
+
+            if (tier > harmonyTier)
+                weight *= alterGain;
+
+            if (semis != 0)
+                weight *= scatterPow;
+            else
+                unison = weight;
+
+            total += weight;
+            pitchTable.cumulative[k] = total;
+        }
+
+        if (total <= 1.0e-6f)
+        {
+            // Nothing survived - ROOT mode with scatter at zero reaches this,
+            // as does a harmony cap that closed everything.  Fall back to
+            // unison so a grain always has a defined pitch.
+            for (int k = 0; k < PitchTable::kSize; ++k)
+                pitchTable.cumulative[k] = (k >= PitchTable::kSpan) ? 1.0f : 0.0f;
+
+            total = 1.0f;
+            unison = 1.0f;
+        }
+
+        pitchTable.unisonShare = juce::jlimit (0.0f, 1.0f, unison / total);
+
+        if (pitchTable.unquantised)
+        {
+            // FREE draws a continuous microtonal spread rather than a set, so
+            // the table's unison share says nothing useful about it.  The
+            // grains all sit within half a semitone of the same transposition,
+            // which is coherent when the spread is narrow and beats when it is
+            // wide - and SCATTER is what sets the width.
+            pitchTable.unisonShare = juce::jlimit (0.0f, 1.0f,
+                                                   1.0f - 0.5f * juce::jlimit (0.0f, 1.0f, scatter));
+        }
+    }
+
+    float GrainFX::drawSemitones (float freeSemis, float scatter) noexcept
+    {
+        if (pitchTable.unquantised)
+        {
+            // Section 108's FREE tier: unquantised and microtonal.  SCATTER
+            // sets how far off the nominal transposition a grain may sit, up
+            // to half a semitone either way.
+            return freeSemis + rng.nextBipolar() * 0.5f * juce::jlimit (0.0f, 1.0f, scatter);
+        }
+
+        const float total = pitchTable.cumulative[PitchTable::kSize - 1];
+        const float r = rng.next01() * total;
+
+        for (int k = 0; k < PitchTable::kSize; ++k)
+            if (r < pitchTable.cumulative[k])
+                return (float) (k - PitchTable::kSpan);
+
+        return 0.0f;
+    }
+
+    void GrainFX::spawnGrain (float sizeSamples, float positionOffset, float spread,
+                              float direction, float widthScale, int windowIndex,
+                              float freeSemis, float scatter, float alter) noexcept
+    {
+        // Find a free slot.  An exhausted pool drops the grain: a dropped
+        // grain is silence that was never scheduled, a stolen one is a window
+        // cut off part way through its envelope, which is a click.
+        int slot = -1;
+
+        for (int g = 0; g < kMaxGrains; ++g)
+        {
+            if (! grains[(size_t) g].active)
+            {
+                slot = g;
+                break;
+            }
+        }
+
+        if (slot < 0)
+            return;
+
+        const float length = juce::jmax (8.0f, sizeSamples);
+
+        float rate = fx::exp2Fast (drawSemitones (freeSemis, scatter) * (1.0f / 12.0f));
+        rate = juce::jlimit (0.2f, 5.0f, rate);
+
+        if (rng.next01() < juce::jlimit (0.0f, 1.0f, direction))
+            rate = -rate;
+
+        // MACRO: Alter swaps in the alternate window for some grains.
+        int window = juce::jlimit (0, kNumWindows - 1, windowIndex);
+
+        if (rng.next01() < 0.6f * juce::jlimit (0.0f, 1.0f, alter))
+            window = (window == kPercussive) ? kHann : kPercussive;
+
+        Grain& g = grains[(size_t) slot];
+
+        if (freezeReady)
+        {
+            // The freeze store is static, so the cursor is a plain index and
+            // moves at the read rate.
+            const float span = length * std::abs (rate);
+            const float top = (float) (freezeLength - 2);
+
+            const float lo = (rate > 0.0f) ? 1.0f : 1.0f + span;
+            const float hi = (rate > 0.0f) ? top - span : top;
+
+            if (hi <= lo)
+                return;                     // will not fit: drop it
+
+            // POSITION scrubs the held slice: 0 is its most recent end.
+            const float wanted = juce::jlimit (0.0f, 1.0f, positionOffset);
+            const float start = top - wanted * top;
+
+            g.cursor = juce::jlimit (lo, hi, start);
+            g.cursorDelta = rate;
+        }
+        else
+        {
+            // A live grain's cursor is a delay behind the write head, and the
+            // head moves one sample per sample, so the delay changes at
+            // (1 - rate).  Both ends of the grain's travel have to stay inside
+            // the buffer and behind the head.
+            const float drift = 1.0f - rate;
+            const float travel = length * drift;        // signed
+            const float top = historySamples;
+
+            const float lo = (travel < 0.0f) ? 2.0f - travel : 2.0f;
+            const float hi = (travel > 0.0f) ? top - travel : top;
+
+            if (hi <= lo)
+                return;                     // will not fit: drop it
+
+            g.cursor = juce::jlimit (lo, hi, positionOffset);
+            g.cursorDelta = drift;
+        }
+
+        // Stereo.  SPREAD is a per-grain pan, multiplied by the World macro's
+        // width scale.  It cannot reach the low band, which is collapsed to
+        // mono after the grains are summed.
+        const float pan = juce::jlimit (-1.0f, 1.0f,
+                                        rng.nextBipolar() * juce::jlimit (0.0f, 1.0f, spread)
+                                            * juce::jlimit (0.0f, 2.0f, widthScale));
+
+        fx::panGains (pan, g.gainL, g.gainR);
+        g.gainL *= panTrim;
+        g.gainR *= panTrim;
+
+        g.phase = 0.0f;
+        g.phaseInc = 1.0f / length;
+        g.window = window;
+        g.fromFreeze = freezeReady;
+        g.active = true;
+
+        ++activeGrains;
+    }
+
+    void GrainFX::process (juce::AudioBuffer<float>& buffer,
+                           const ParameterRegistry& p,
+                           const MacroState& macros)
+    {
+        const int n = juce::jmin (macros.numSamples, buffer.getNumSamples());
+        const int numCh = juce::jmin (2, buffer.getNumChannels());
+
+        if (n <= 0 || numCh <= 0)
+            return;
+
+        float* left  = buffer.getWritePointer (0);
+        float* right = (numCh > 1) ? buffer.getWritePointer (1) : left;
+
+        // -- the registry, read exactly once ---------------------------------
+        //  grainfx_on is read as well as being checked by the chain, because
+        //  Grain must keep writing its history while it is switched off.  An
+        //  engine that stopped remembering when it was bypassed would have
+        //  nothing to granulate for the first seconds after being switched on.
+        const bool  enabled   = p.flag (PID::grainFxOn);
+        const float scatter   = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainScatter));
+        const float sizeMs    = juce::jlimit (kMinGrainMs, kMaxGrainMs, p.raw (PID::grainSize));
+        const float densityP  = juce::jlimit (0.5f, kMaxDensity, p.raw (PID::grainDensity));
+        const float position  = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainPosition));
+        const int   pitchMode = juce::jlimit (0, 6, p.choice (PID::grainPitchMode));
+        const float freeSemis = juce::jlimit (-24.0f, 24.0f, p.raw (PID::grainPitch));
+        const float spreadP   = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainSpread));
+        const float jitterP   = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainJitter));
+        const float direction = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainDirection));
+        const int   windowIx  = juce::jlimit (0, kNumWindows - 1, p.choice (PID::grainWindow));
+        const float feedback  = juce::jlimit (0.0f, 0.95f, p.raw (PID::grainFeedback));
+        const bool  freeze    = p.flag (PID::grainFreeze);
+        const float mixParam  = juce::jlimit (0.0f, 1.0f, p.raw (PID::grainMix));
+
+        const int scaleTypeIx = juce::jlimit (0, 9, p.choice (PID::scaleType));
+        const int harmonyIx   = juce::jlimit (0, 2, p.choice (PID::harmonyMode));
+
+        // root_note is read and then deliberately not used.  A grain's
+        // transposition is relative to whatever the material already is, so
+        // the tonic's absolute pitch class cannot change which intervals are
+        // in key - only the scale's interval pattern can.  It is read here so
+        // that the AUTO resolution has one home when analysis arrives.
+        const int rootNoteIx = p.choice (PID::rootNote);
+        juce::ignoreUnused (rootNoteIx);
+
+        // -- macro response, added to the controls ---------------------------
+        const float jitter = juce::jlimit (0.0f, 1.0f, jitterP + 0.35f * macros.movement);
+        const float spread = juce::jlimit (0.0f, 1.0f, spreadP
+                                           + 0.30f * macros.scale
+                                           + 0.15f * macros.distance);
+        const float widthScale = juce::jlimit (0.0f, 2.0f, macros.widthScale);
+        const float alter = juce::jlimit (0.0f, 1.0f, macros.alterAmount);
+
+        // SCATTER is the module's primary control, so it reaches density as
+        // well as the pitch distribution and the position spread.
+        const float density = juce::jlimit (0.25f, kMaxDensity * 1.25f,
+                                            densityP * (0.35f + 0.65f * scatter));
+
+        buildPitchTable (pitchMode, scaleTypeIx, harmonyIx, scatter, alter);
+
+        // -- gain staging: density must mean density, not volume -------------
+        const float sizeSeconds = sizeMs * 0.001f;
+        const float sizeSamples = sizeSeconds * (float) sampleRate;
+
+        const float overlap = juce::jmax (1.0f, density * sizeSeconds);
+        const float dirCoherence = 1.0f - 2.0f * juce::jmin (direction, 1.0f - direction);
+        const float coherence = juce::jlimit (0.0f, 1.0f, pitchTable.unisonShare
+                                              * (1.0f - jitter) * dirCoherence);
+
+        const float wMean = windowMean[(size_t) windowIx];
+        const float wRms  = windowRms [(size_t) windowIx];
+
+        // gain = 1 / ( overlap^(0.5 + 0.5c) * windowRms^(1-c) * windowMean^c )
+        const float logGain = (0.5f + 0.5f * coherence) * fx::log2Fast (overlap)
+                            + (1.0f - coherence) * fx::log2Fast (wRms)
+                            + coherence * fx::log2Fast (wMean);
+
+        //  Bounded at 2x.  The law is a loudness match, and loudness-matching
+        //  a sparse stream of a high-crest window - PERCUSSIVE is 89 % silence
+        //  and its RMS is 0.236 - would ask for nine times gain and produce
+        //  peaks nine times the source's.  The clamp binds there, so
+        //  PERCUSSIVE at low density is quieter than the source rather than
+        //  peakier than it.  Section 148 cuts both ways: not using loudness to
+        //  fake quality includes not manufacturing headroom problems.
+        const float grainGain = juce::jlimit (0.02f, 2.0f, fx::exp2Fast (-logGain));
+
+        // -- freeze ----------------------------------------------------------
+        if (freeze && ! freezeHeld)
+        {
+            // Engaged: start copying the last kFreezeSeconds of history into
+            // the store.  Grains keep coming from the live history until it is
+            // full, so nothing stops while the copy runs.
+            freezeFill = 0;
+            freezeReady = false;
+            freezeSourceStart = history.getWriteIndex() - freezeLength;
+        }
+        else if (! freeze && freezeHeld)
+        {
+            // Released.  New grains read the live history again; grains
+            // already in flight finish on the store they started on, which is
+            // why neither edge of FREEZE can click.
+            freezeReady = false;
+            freezeFill = 0;
+        }
+
+        freezeHeld = freeze;
+
+        if (freeze && ! freezeReady)
+        {
+            // Bounded work: 32 store samples per audio sample, so the copy is
+            // proportional to the block size and never a spike.
+            const int mask = history.getMask();
+            //  jmin against maxBlock so that a host handing over a block
+            //  larger than the one it promised in prepare() cannot turn this
+            //  into an unbounded burst.
+            const int budget = juce::jmin (n, juce::jmax (1, maxBlock)) * kFreezeCopyRate;
+            const int end = juce::jmin (freezeLength, freezeFill + budget);
+
+            for (int k = freezeFill; k < end; ++k)
+            {
+                const int idx = (freezeSourceStart + k) & mask;
+
+                float l = 0.0f, r = 0.0f;
+                history.readAt ((float) idx, l, r);
+
+                freezeL[(size_t) k] = l;
+                freezeR[(size_t) k] = r;
+            }
+
+            freezeFill = end;
+
+            if (freezeFill >= freezeLength)
+            {
+                // Two guard points past the end so the interpolator in
+                // readFreeze() never reads an uninitialised sample.
+                freezeL[(size_t) freezeLength]     = freezeL[(size_t) (freezeLength - 1)];
+                freezeR[(size_t) freezeLength]     = freezeR[(size_t) (freezeLength - 1)];
+                freezeL[(size_t) freezeLength + 1] = freezeL[(size_t) (freezeLength - 1)];
+                freezeR[(size_t) freezeLength + 1] = freezeR[(size_t) (freezeLength - 1)];
+
+                freezeReady = true;
+            }
+        }
+
+        // -- BYPASS: at zero mix nothing is audible, so nothing is run --------
+        //  The history is still written, because a granulator that only starts
+        //  remembering when its mix opens has nothing to granulate.  The
+        //  buffer is not touched at all, so the output is the input sample for
+        //  sample rather than merely close to it.
+        if (! enabled || (mixParam <= 0.0f && prevMix <= 0.0f))
+        {
+            for (auto& g : grains)
+                g.active = false;
+
+            activeGrains = 0;
+            untilNextGrain = 0.0f;
+            fbL = fbR = 0.0f;
+            fbPeak = 0.0f;
+
+            for (int i = 0; i < n; ++i)
+                history.write (left[i], (numCh > 1) ? right[i] : left[i]);
+
+            // The block that just went out was pure dry, so the next one has
+            // to ramp its mix up from zero rather than from whatever the
+            // parameter happens to say.  Without this, re-enabling Grain at a
+            // high mix would step straight to full wet.
+            prevMix = 0.0f;
+            return;
+        }
+
+        fx::Ramp mixRamp;
+        mixRamp.set (prevMix, mixParam, n);
+
+        const float fbAmount = feedback * kFeedbackTrim;
+
+        // POSITION reaches back over 60 % of the history, which leaves room
+        // for the grain's own travel at the far end.
+        const float baseDelay = (0.01f + position * (float) (kHistorySeconds * 0.6))
+                                    * (float) sampleRate;
+        const float scatterRange = scatter * (float) sampleRate * 0.75f;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = left[i];
+            const float inR = (numCh > 1) ? right[i] : inL;
+
+            // Input plus the previous sample's limited feedback.  The one
+            // sample of delay is unavoidable and harmless: the history has to
+            // be written before the grains read it.
+            history.write (fx::guard (inL + fbAmount * fbL),
+                           fx::guard (inR + fbAmount * fbR));
+
+            // ---- scheduling -------------------------------------------------
+            untilNextGrain -= 1.0f;
+
+            if (untilNextGrain <= 0.0f)
+            {
+                float offset;
+
+                if (freezeReady)
+                {
+                    // POSITION scrubs the held slice; SCATTER and JITTER widen
+                    // the region grains are drawn from.
+                    offset = juce::jlimit (0.0f, 1.0f, position
+                                + rng.nextBipolar() * 0.35f * scatter
+                                    * (0.25f + 0.75f * jitter));
+                }
+                else
+                {
+                    // MACRO: Breath drifts the read position, scaled by Motion.
+                    // Section 72 names Grain as a Motion destination, and the
+                    // read position is slow enough for Breath to be near.
+                    const float drift = macros.breathAt (i) * macros.movement
+                                            * 0.08f * historySamples;
+
+                    const float scatterOffset = rng.nextBipolar() * scatterRange
+                                                    * (0.25f + 0.75f * jitter);
+
+                    offset = juce::jmax (2.0f, baseDelay + scatterOffset + drift);
+                }
+
+                spawnGrain (sizeSamples, offset, spread, direction, widthScale,
+                            windowIx, freeSemis, scatter, alter);
+
+                const float interval = (float) sampleRate / density;
+
+                untilNextGrain = juce::jmax (4.0f,
+                    interval * (1.0f + 0.9f * jitter * rng.nextBipolar()));
+            }
+
+            // ---- render the pool ---------------------------------------------
+            float wetL = 0.0f, wetR = 0.0f;
+
+            for (int gi = 0; gi < kMaxGrains; ++gi)
+            {
+                Grain& g = grains[(size_t) gi];
+
+                if (! g.active)
+                    continue;
+
+                float sl = 0.0f, sr = 0.0f;
+
+                if (g.fromFreeze)
+                    readFreeze (g.cursor, sl, sr);
+                else
+                    history.read (g.cursor, sl, sr);
+
+                const float wpos = g.phase * (float) kWindowTableSize;
+                const int   wi = juce::jlimit (0, kWindowTableSize - 1, (int) wpos);
+                const float wf = juce::jlimit (0.0f, 1.0f, wpos - (float) wi);
+
+                const auto& table = windows[(size_t) g.window];
+                const float w = fx::lerp (table[(size_t) wi], table[(size_t) (wi + 1)], wf);
+
+                wetL += sl * w * g.gainL;
+                wetR += sr * w * g.gainR;
+
+                g.cursor += g.cursorDelta;
+                g.phase  += g.phaseInc;
+
+                if (g.phase >= 1.0f)
+                {
+                    g.active = false;
+                    --activeGrains;
+                }
+            }
+
+            wetL *= grainGain;
+            wetR *= grainGain;
+
+            // ---- the low band stays put --------------------------------------
+            //  Sections 38/40/43.  SPREAD pans individual grains, which
+            //  decorrelates whatever is in them.  Splitting and collapsing the
+            //  low band to mono keeps the bass at correlation 1.0 whatever
+            //  SPREAD and widthScale say, and the splits are complementary so
+            //  the stage is transparent when the two channels already agree.
+            float lowL, midL, highL;
+            float lowR, midR, highR;
+
+            bandL.split (wetL, lowL, midL, highL);
+            bandR.split (wetR, lowR, midR, highR);
+
+            const float lowMono = 0.5f * (lowL + lowR);
+
+            wetL = fx::guard (lowMono + midL + highL);
+            wetR = fx::guard (lowMono + midR + highR);
+
+            // ---- feedback, bounded four ways ----------------------------------
+            {
+                const float pl = fbDcL.process (fbLpL.lowpass (wetL));
+                const float pr = fbDcR.process (fbLpR.lowpass (wetR));
+
+                const float peak = juce::jmax (std::abs (pl), std::abs (pr));
+
+                fbPeak += (peak - fbPeak) * (peak > fbPeak ? fbAttack : fbRelease);
+
+                const float limit = (fbPeak > kFeedbackCeiling)
+                    ? kFeedbackCeiling / juce::jmax (1.0e-6f, fbPeak)
+                    : 1.0f;
+
+                fbL = fx::guard (fx::tanhFast (pl * limit));
+                fbR = fx::guard (fx::tanhFast (pr * limit));
+            }
+
+            // ---- mix ----------------------------------------------------------
+            float dryGain, wetGain;
+            fx::dryWetGains (mixRamp.at (i), dryGain, wetGain);
+
+            const float outL = fx::guard (dryGain * inL + wetGain * wetL);
+            const float outR = fx::guard (dryGain * inR + wetGain * wetR);
+
+            left[i] = outL;
+
+            if (numCh > 1)
+                right[i] = outR;
+        }
+
+        prevMix = mixParam;
     }
 }

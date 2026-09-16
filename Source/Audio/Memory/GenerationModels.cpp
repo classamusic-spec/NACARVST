@@ -15,10 +15,10 @@ namespace nacar::memory
     static const CopyCharacter kPrimary[kMaxCopies] =
     {
         //  hf     lf   wand  tran  drive  bias   div   pre   hold  cents  hz   diff  decor  even  odd   tilt  absorb noise  ntilt drop  hole
-        { 13000.f, 30.f, 0.10f, 0.18f, 0.35f,  0.06f, 1.15f, 0.92f, 0.05f,  3.0f, 0.80f, 0.22f, 0.06f, 0.35f, 0.10f, -0.05f, 0.20f, 0.00035f,  0.45f, 0.00f, 0.00f },
-        {  8500.f, 46.f, 0.16f, 0.34f, 0.60f, -0.09f, 2.45f, 0.62f, 0.22f,  5.0f, 0.62f, 0.42f, 0.18f, 0.25f, 0.30f, -0.10f, 0.34f, 0.00090f,  0.20f, 0.00f, 0.00f },
-        {  5200.f, 66.f, 0.24f, 0.52f, 0.95f,  0.14f, 3.70f, 0.34f, 0.45f,  7.0f, 0.54f, 0.66f, 0.36f, 0.18f, 0.48f, -0.16f, 0.50f, 0.00220f, -0.10f, 0.15f, 0.18f },
-        {  3300.f, 92.f, 0.34f, 0.72f, 1.40f, -0.20f, 5.40f, 0.12f, 0.70f,  9.0f, 0.47f, 0.85f, 0.55f, 0.30f, 0.62f, -0.24f, 0.68f, 0.00500f, -0.35f, 0.60f, 0.45f }
+        { 13000.f, 24.f, 0.10f, 0.18f, 0.35f,  0.06f, 1.15f, 0.92f, 0.05f,  3.0f, 0.80f, 0.22f, 0.06f, 0.35f, 0.10f, -0.05f, 0.20f, 0.00035f,  0.45f, 0.00f, 0.00f },
+        {  8500.f, 34.f, 0.16f, 0.34f, 0.60f, -0.09f, 2.45f, 0.62f, 0.22f,  5.0f, 0.62f, 0.42f, 0.18f, 0.25f, 0.30f, -0.10f, 0.34f, 0.00090f,  0.20f, 0.00f, 0.00f },
+        {  5200.f, 46.f, 0.24f, 0.52f, 0.95f,  0.14f, 3.70f, 0.34f, 0.45f,  7.0f, 0.54f, 0.66f, 0.36f, 0.18f, 0.48f, -0.16f, 0.50f, 0.00220f, -0.10f, 0.15f, 0.18f },
+        {  3300.f, 60.f, 0.34f, 0.72f, 1.40f, -0.20f, 5.40f, 0.12f, 0.70f,  9.0f, 0.47f, 0.85f, 0.55f, 0.30f, 0.62f, -0.24f, 0.68f, 0.00500f, -0.35f, 0.60f, 0.45f }
     };
 
     //  The alternate lineage, reached through macros.alterAmount: a sampler
@@ -28,10 +28,10 @@ namespace nacar::memory
     //  of the degradation differs; the amount does not.
     static const CopyCharacter kAlternate[kMaxCopies] =
     {
-        { 16000.f, 22.f, 0.06f, 0.12f, 0.25f, -0.04f, 1.60f, 0.70f, 0.20f,  2.0f, 1.05f, 0.14f, 0.10f, 0.20f, 0.22f,  0.04f, 0.12f, 0.00040f,  0.75f, 0.00f, 0.00f },
-        { 12500.f, 34.f, 0.10f, 0.22f, 0.45f,  0.07f, 3.20f, 0.42f, 0.45f,  3.5f, 0.88f, 0.26f, 0.26f, 0.14f, 0.40f,  0.02f, 0.20f, 0.00110f,  0.55f, 0.00f, 0.06f },
-        {  9000.f, 48.f, 0.16f, 0.34f, 0.70f, -0.11f, 5.00f, 0.20f, 0.68f,  5.0f, 0.74f, 0.40f, 0.44f, 0.10f, 0.55f, -0.02f, 0.30f, 0.00260f,  0.35f, 0.28f, 0.30f },
-        {  6200.f, 62.f, 0.24f, 0.50f, 1.05f,  0.16f, 7.60f, 0.06f, 0.88f,  7.0f, 0.66f, 0.58f, 0.66f, 0.16f, 0.70f, -0.06f, 0.42f, 0.00560f,  0.10f, 0.85f, 0.62f }
+        { 16000.f, 18.f, 0.06f, 0.12f, 0.25f, -0.04f, 1.60f, 0.70f, 0.20f,  2.0f, 1.05f, 0.14f, 0.10f, 0.20f, 0.22f,  0.04f, 0.12f, 0.00040f,  0.75f, 0.00f, 0.00f },
+        { 12500.f, 26.f, 0.10f, 0.22f, 0.45f,  0.07f, 3.20f, 0.42f, 0.45f,  3.5f, 0.88f, 0.26f, 0.26f, 0.14f, 0.40f,  0.02f, 0.20f, 0.00110f,  0.55f, 0.00f, 0.06f },
+        {  9000.f, 34.f, 0.16f, 0.34f, 0.70f, -0.11f, 5.00f, 0.20f, 0.68f,  5.0f, 0.74f, 0.40f, 0.44f, 0.10f, 0.55f, -0.02f, 0.30f, 0.00260f,  0.35f, 0.28f, 0.30f },
+        {  6200.f, 44.f, 0.24f, 0.50f, 1.05f,  0.16f, 7.60f, 0.06f, 0.88f,  7.0f, 0.66f, 0.58f, 0.66f, 0.16f, 0.70f, -0.06f, 0.42f, 0.00560f,  0.10f, 0.85f, 0.62f }
     };
 
     const CopyCharacter& primaryCopy (int i) noexcept
@@ -121,8 +121,8 @@ namespace nacar::memory
 
         wobbleBase     = juce::jmax (16.0f, 0.0015f * (float) sr);
         wobbleMaxDepth = wobbleBase - 8.0f;
-        midBase        = juce::jmax (8.0f,  0.00067f * (float) sr);
-        midMaxDepth    = midBase * 0.70f;
+        driftBase        = juce::jmax (8.0f,  0.00067f * (float) sr);
+        driftMaxDepth    = driftBase * 0.70f;
 
         int diffuseSamples[3] {};
         int diffuseTotal = 0;
@@ -162,13 +162,20 @@ namespace nacar::memory
         sideHpA.setCutoff (kLowSplitHz, sr);
         sideHpB.setCutoff (kLowSplitHz, sr);
 
+        // 5 to 14 samples at 48 kHz: short enough that the phase difference the
+        // decorrelation creates is confined to the top of the spectrum, which is
+        // the only place it is wanted.
+        float decorDelays[2];
+
+        for (auto& d : decorDelays)
+            d = juce::jmax (2.0f, (5.0f + 9.0f * seed.next01()) * rateScale);
+
         for (int c = 0; c < 2; ++c)
         {
             auto& ch = channel[c];
 
             ch.wobbleDelay.prepare ((int) (wobbleBase + wobbleMaxDepth) + 8);
-            ch.lowAlign   .prepare ((int) midBase + 8);
-            ch.midDelay   .prepare ((int) (midBase + midMaxDepth) + 8);
+            ch.driftDelay   .prepare ((int) (driftBase + driftMaxDepth) + 8);
 
             ch.lowCut.setCutoff (20.0f,    sr);
             ch.hfA   .setCutoff (18000.0f, sr);
@@ -187,19 +194,20 @@ namespace nacar::memory
             ch.split.prepare (kLowSplitHz, kHighSplitHz, sr);
             ch.tilt .prepare (sr, 700.0f);
 
+            // The two channels get the *same* delays and differ only in the
+            // sign of the coefficient.  Different delays would offset the
+            // channels by several samples even at zero decorrelation, because
+            // an allpass with a coefficient of zero is a plain delay - which is
+            // exactly the bug this comment exists to stop coming back.
             for (int k = 0; k < 2; ++k)
             {
-                // 5 to 14 samples at 48 kHz: short enough that the phase
-                // difference they create is confined to the top of the
-                // spectrum, which is the only place decorrelation is wanted.
-                const float d = juce::jmax (2.0f, (5.0f + 9.0f * seed.next01()) * rateScale);
-                ch.decorDelay[k] = d;
-                ch.decor[k].prepare ((int) d + 4);
-                ch.decor[k].setDelay (d);
+                ch.decor[k].prepare ((int) decorDelays[k] + 4);
+                ch.decor[k].setDelay (decorDelays[k]);
                 ch.decor[k].setCoefficient (0.0f);
             }
 
             ch.colourEnv.setTime (0.030f, sr);
+            ch.colourDc.prepare (sr);
             ch.holeLo.setCutoff (700.0f,  sr);
             ch.holeHi.setCutoff (1400.0f, sr);
 
@@ -215,7 +223,7 @@ namespace nacar::memory
         // Onset delay: the wobble delay's base, the diffusion chain, the mid
         // band's alignment delay and the resampler's single sample.  Constant
         // for the life of the object, which is what lets the engine report it.
-        latency = (int) wobbleBase + diffuseTotal + (int) midBase + 1;
+        latency = (int) wobbleBase + diffuseTotal + (int) driftBase + 1;
 
         reset();
     }
@@ -252,8 +260,7 @@ namespace nacar::memory
         for (auto& ch : channel)
         {
             ch.wobbleDelay.reset();
-            ch.lowAlign.reset();
-            ch.midDelay.reset();
+            ch.driftDelay.reset();
 
             ch.lowCut.reset();
             ch.hfA.reset();
@@ -268,6 +275,7 @@ namespace nacar::memory
             ch.split.reset();
             ch.tilt.reset();
             ch.colourEnv.reset();
+            ch.colourDc.reset();
             ch.holeLo.reset();
             ch.holeHi.reset();
             ch.noiseColour.reset();
@@ -277,7 +285,7 @@ namespace nacar::memory
             ch.wobblePhase = ch.startPhase;
             ch.dropGain = ch.dropTarget = 1.0f;
             ch.dropTicks = 0;
-            ch.midDelaySamples = 0.0f;
+            ch.driftSamples = 0.0f;
             ch.noiseGain = 0.0f;
         }
     }
@@ -399,8 +407,13 @@ namespace nacar::memory
         const float decor = juce::jlimit (0.0f, 0.75f,
                                           c.decorrelation * depth * (0.45f + 0.90f * asym));
 
-        // The side high pass engages with anything that could decorrelate.
-        sideMix = juce::jlimit (0.0f, 1.0f, 3.0f * juce::jmax (decor, 0.5f * wobbleAmount * c.decorrelation));
+        // The side high pass engages with anything that could decorrelate, and
+        // there are two such things: the allpass pair above and the differential
+        // half of the drift, which is a per-channel delay difference and so acts
+        // at every frequency.  Whichever is larger decides.
+        const float differential = wobbleAmount * (0.25f + 0.55f * asym);
+
+        sideMix = juce::jlimit (0.0f, 1.0f, 4.0f * juce::jmax (decor, differential));
 
         // -- 8  harmonic colouration ---------------------------------------------
         colourEvenGain = c.colourEven * depth * 0.20f * (1.0f + 0.4f * age);
@@ -458,7 +471,7 @@ namespace nacar::memory
             const float corner = hfBase * hfWander * fx::exp2Fast (lean * asym * 0.35f * depth);
 
             ch.hfA.setCutoff (corner, sr);
-            ch.hfB.setCutoff (corner * 1.35f, sr);
+            ch.hfB.setCutoff (corner * 2.2f, sr);
             ch.lowCut.setCutoff (lfBase, sr);
 
             const float absorbCorner = juce::jmax (350.0f,
@@ -492,8 +505,7 @@ namespace nacar::memory
             ch.wobblePhase += (ch.wobbleRate * (1.0f + 1.5f * movement)) / controlRate;
             ch.wobblePhase -= std::floor (ch.wobblePhase);
 
-            ch.midDelaySamples = midMaxDepth * fx::sineTurns (ch.wobblePhase)
-                               * wobbleAmount * (0.40f + 0.60f * asym);
+            ch.driftSamples = driftMaxDepth * fx::sineTurns (ch.wobblePhase) * differential;
 
             ch.asymGain = 1.0f + 0.12f * lean * asym * depth;
 
@@ -621,35 +633,42 @@ namespace nacar::memory
                     x = ch.diffuse[1].process (x);
                     x = ch.diffuse[2].process (x);
 
-                    // -- everything below is mid and high only -----------------
+                    // 8  harmonic colouration, on the body band only and
+                    //    normalised by that band's own envelope so it stays a
+                    //    signature rather than becoming another saturator.  The
+                    //    three bands sum back to the input exactly, so this is
+                    //    the only thing the split changes.
                     float low, mid, high;
                     ch.split.split (x, low, mid, high);
 
-                    ch.lowAlign.write (low);
-                    low = ch.lowAlign.read (midBase);
-
-                    // 8  harmonic colouration, normalised by the band's own
-                    //    envelope so it stays a signature rather than becoming
-                    //    another saturator
                     const float env = ch.colourEnv.process (std::abs (mid));
                     const float u   = juce::jlimit (-2.0f, 2.0f, mid / (env + 0.02f));
                     const float u2  = u * u;
 
-                    mid += (colourEvenGain * (u2 - 0.5f)
-                          + colourOddGain  * (u2 * u - 0.75f * u)) * env;
+                    // The squared term has a non-zero mean for anything but a
+                    // unit sine, and that mean is a DC offset proportional to
+                    // the envelope.  It is removed here rather than left for
+                    // the next copy's input blocker, because the last copy in
+                    // the chain does not have a next copy.
+                    const float colour = colourEvenGain * (u2 - 0.5f)
+                                       + colourOddGain  * (u2 * u - 0.75f * u);
 
-                    float mh = mid + high;
+                    float y = low + mid + high + ch.colourDc.process (colour * env);
 
-                    // 5b differential drift, 7 decorrelation
-                    ch.midDelay.write (mh);
-                    mh = ch.midDelay.read (midBase + ch.midDelaySamples);
-                    mh = ch.decor[0].process (mh);
-                    mh = ch.decor[1].process (mh);
+                    // 5b the differential half of the drift, and 7 the stereo
+                    //    decorrelation.  Both are full band on purpose: an
+                    //    allpass and a delay are magnitude-flat, so running them
+                    //    on the whole signal cannot ripple a crossover, and the
+                    //    side high pass below removes the low frequency
+                    //    difference they create far more exactly than a band
+                    //    split would have avoided it.
+                    ch.driftDelay.write (y);
+                    y = ch.driftDelay.read (driftBase + ch.driftSamples);
+                    y = ch.decor[0].process (y);
+                    y = ch.decor[1].process (y);
 
                     // 11 channel asymmetry, and generation IV's dropouts
-                    mh *= ch.asymGain * ch.dropGain;
-
-                    float y = low + mh;
+                    y *= ch.asymGain * ch.dropGain;
 
                     if (holeAmount > 0.0001f)
                         y -= holeAmount * (ch.holeHi.lowpass (y) - ch.holeLo.lowpass (y));

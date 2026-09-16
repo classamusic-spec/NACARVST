@@ -33,6 +33,14 @@ namespace nacar
         void reset();
         void process (juce::AudioBuffer<float>&, const ParameterRegistry&, const MacroState&);
 
+        /** Samples of latency the module adds while it is active.
+
+            The transport's read head sits at a centre tap so that it can wander
+            either side of it, and the dry path is read from the same tap so
+            that dry and wet stay aligned.  That alignment is what costs the
+            delay.  Zero while bypassed - the buffer is not touched at all. */
+        int getLatencySamples() const noexcept;
+
     private:
         // ===================================================================
         //  ERA

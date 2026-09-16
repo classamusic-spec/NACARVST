@@ -267,10 +267,12 @@ state at all. When the transport is stopped an internal beat counter runs at the
 host tempo so the user can audition Pulse without pressing play; it is kept level
 with the song position while the transport runs, so stopping continues in place.
 
-**MIDI** — `noteTriggered()`. `NacarEngine` calls it once per note-on, at the top
-of the block. `noteTriggeredAt(offset)` exists for a caller that knows the note's
-offset; nothing uses it yet, so MIDI-triggered Pulse is currently quantised to
-the block, up to 21 ms at 48 kHz with a 1024-sample buffer.
+**MIDI** — `noteTriggeredAt (offset)`. `NacarEngine` calls it once per note-on
+with the note's own position inside the block, so the duck lands on the note
+rather than at the top of the buffer. The no-argument `noteTriggered()` is still
+there for a caller that does not know the offset; using it costs up to 21 ms at
+48 kHz with a 1024-sample buffer, which on a kick is the difference between a
+duck and a flam.
 
 **SIDECHAIN** — `setSidechainInput()` and a transient detector: a fast envelope
 (0.5 ms / 40 ms) against a slow one (180 ms), firing when the fast one exceeds
@@ -354,9 +356,11 @@ leave the instrument with fifteen sources and fourteen behaviours.
   work means the *voice* consulting the matrix for its own targets, with its own
   envelope and velocity values, rather than this engine publishing a number.
   They read zero.
-* **MOD WHEEL, AFTERTOUCH** are global, but nothing hands this engine the
-  `MidiBuffer`. `setModWheel()` and `setAftertouch()` exist and are wired all the
-  way to the matrix; **nothing calls them**, so both read zero.
+* **MOD WHEEL, AFTERTOUCH** are global and are now live. `NacarEngine::process`
+  scans the block's `MidiBuffer` and calls `setModWheel()` on CC 1 and
+  `setAftertouch()` on either channel pressure or polyphonic aftertouch,
+  whichever the controller sends. Both latch at block rate like every other
+  source.
 
 ### Units
 
@@ -368,9 +372,47 @@ range. The sum over routings is clamped to −1…1, because more than a full ra
 of offset means nothing. The query is O(1): `beginBlock` accumulates into a
 per-parameter array and clears only the entries the previous block touched.
 
-**Nothing consumes the matrix.** Every engine still reads its parameters directly
-from the registry. `rebuildModMatrix()` is never called, so the live routing set
-is empty and `modulationFor()` returns zero for everything.
+### How a routing becomes audible
+
+No engine knows the matrix exists, and that is deliberate. Threading a matrix
+query through eleven engines and roughly a hundred and forty parameter reads
+would have meant editing every one of them, and every engine written afterwards
+would have had to remember to do the same.
+
+Instead `ParameterRegistry` carries a **modulation overlay**: one atomic per
+parameter, holding either the value the matrix wants or a sentinel meaning "not
+modulated". `raw()` returns the overlay when there is one and the user's value
+otherwise, so every existing `p.raw (PID::…)` in the instrument picks modulation
+up for free. `userValue()` is the unmodulated read, and the interface uses that
+one — a knob that jitters because an LFO is running is not showing the user
+their own setting, and typed value entry into a moving field is impossible.
+
+`NacarEngine::process` is the only writer. Once per block, after
+`ModulationEngine::updateBlock` and **before the synth renders**, it walks the
+live routings, writes an override for each distinct target, and — the part that
+is easy to get wrong — **clears the overrides the matrix has stopped
+targeting**. A stale override is a parameter frozen at whatever the matrix last
+pushed it to: a knob that has quietly stopped working, with nothing on screen to
+explain why.
+
+Two consequences worth stating:
+
+* The macro resolver runs **twice** per block, once before the overlay is
+  applied and once after. The matrix's macro *sources* are the knob positions —
+  a user routing MEMORY means the control they can see — so those are latched
+  from the unmodulated values on the first pass. A macro is also a legal
+  *target*, and without the second pass it would be the one dead entry in the
+  target menu. There is no loop, because the two passes read different things.
+* Because the overlay is written before `synth.process`, a routing reaches the
+  oscillators in the same block it was computed for rather than the next one.
+
+`Tests/Main.cpp` has a `Mod matrix` suite that asserts an unrouted parameter
+reads exactly what the user set, that a routed one moves and keeps moving, that
+modulation never pushes a parameter outside its own range, that removing a
+routing gives the parameter back, that a target string that no longer exists is
+inert rather than wrong, that the four per-voice sources really do read zero,
+and — separately from all of those — that a routing changes the rendered audio,
+which an overlay that engines never read would fail.
 
 ---
 
@@ -413,24 +455,33 @@ and its jitter multiplier cannot reach zero.
 
 - **Nobody has listened to any of this.** Everything above is an argument from
   construction, not a measurement and not a judgement about how it sounds.
-- **Nothing consumes the mod matrix.** `rebuildModMatrix()` has no caller, so the
-  routing set is always empty. The matrix edits and persists in the UI and
-  resolves correctly here; it does not modulate anything.
 - **The matrix is block-rate.** `offsetFor` returns one number per parameter per
   block. An LFO routed through it at 40 Hz will step at every buffer boundary. A
   per-sample matrix means the consumer indexing the source buffers itself, which
   is a different interface from the one specified.
-- **Four sources read zero**: ENV 1, ENV 2, VELOCITY, KEY TRACK (per-voice — the
-  voice must consult the matrix instead) and, for a different reason, MOD WHEEL
-  and AFTERTOUCH (plumbing exists, nothing calls the setters).
+- **Four sources read zero**: ENV 1, ENV 2, VELOCITY and KEY TRACK. They are
+  per-voice quantities and making them work means the *voice* consulting the
+  matrix for its own targets, not this engine publishing a global average. They
+  are inert on purpose, and a test asserts they stay that way so that anybody who
+  later wires a global stand-in has to say so out loud.
+- **A modulated parameter is still modulated one block at a time.** The overlay
+  holds a single value for the whole block, so a routing that sweeps a parameter
+  fast enough will step at buffer boundaries — the block-rate limitation above,
+  seen from the consumer's end. Per-sample destinations that matter (the synth's
+  own LFO paths, Pulse's five envelopes) bypass the matrix entirely and read the
+  per-sample buffers directly.
+- **Two routings onto the same target sum and then clamp.** That is the
+  documented behaviour, but it means the second routing can appear to do nothing
+  once the first has already pushed the parameter to a rail.
 - **The sidechain source has no input** and always falls back to CLOCK. The
   envelope follower has never processed a sample and its thresholds are chosen by
   reasoning, not by trying it on a kick.
-- **The four non-volume Pulse envelopes have no consumer.** `NacarEngine` applies
-  both volume and width from `MacroState::pulse`, so the width duck's faster
-  recovery is generated and then discarded.
-- **MIDI Pulse triggers are quantised to the block** because the caller uses
-  `noteTriggered()` rather than `noteTriggeredAt()`. Up to 21 ms at 48 kHz.
+- **Three of the five Pulse envelopes have no consumer.** `NacarEngine`'s output
+  stage takes VOLUME from `MacroState::pulse` and WIDTH from
+  `pulseEnvelope (Destination::width)`, so those two have their own shapes as
+  intended. FILTER, SPACE and MEMORY are generated and then discarded: the
+  engines that own those behaviours would each have to read them, and none does
+  yet.
 - **An oversized block disables modulation for that block.** If a host hands over
   more samples than it promised in `prepare()`, the four pointers are set to null
   (which `MacroState`'s accessors already read as silence) rather than running off

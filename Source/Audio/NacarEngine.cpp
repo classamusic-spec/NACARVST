@@ -145,6 +145,11 @@ namespace nacar
         ModulationEngine modulation;
         MemoryEngine memory;
 
+        /** The parameters the overlay is currently overriding, so the next
+            block can take back the ones the matrix has stopped targeting. */
+        PID activeTargets[ModMatrix::numSlots] {};
+        int numActiveTargets = 0;
+
         RetroEngine  retro;
         CrushEngine  crush;
         FilterFX     chainFilter;
@@ -158,6 +163,38 @@ namespace nacar
         WeightEngine weight;
 
         std::atomic<juce::uint32> packedOrder { FxOrder::defaultOrder().pack() };
+
+        // -------------------------------------------------------------------
+        //  Latency
+        //
+        //  Two modules delay the signal while they are active - Retro by its
+        //  transport's centre tap, Crush by its oversampling round trip - and
+        //  both are zero while bypassed, so the figure moves as the user
+        //  switches modules on and off.  It is published for the processor to
+        //  report, which it does from the message thread: setLatencySamples()
+        //  notifies the host and is not safe to call from here.
+        // -------------------------------------------------------------------
+        std::atomic<int> latencySamples { 0 };
+
+        void updateLatency (const ParameterRegistry& p) noexcept
+        {
+            int total = 0;
+
+            if (p.flag (PID::retroOn))
+                total += retro.getLatencySamples();
+
+            if (p.flag (PID::crushOn))
+                total += crush.getLatencySamples();
+
+            // Memory has no on/off: it reports zero when its macro is at zero,
+            // and a generation-dependent onset delay of about 3 ms per copy
+            // otherwise.  That figure MOVES when the user changes generation,
+            // which is why the processor reports latency through an
+            // AsyncUpdater rather than only at prepareToPlay.
+            total += memory.getLatencySamples();
+
+            latencySamples.store (total, std::memory_order_relaxed);
+        }
 
         // Every engine works on stereo.  When the host gives us a mono bus we
         // render here and fold at the end rather than making eleven engines
@@ -222,41 +259,44 @@ namespace nacar
             stereo.clear();
             widthSplitL.reset();
             widthSplitR.reset();
+            latencySamples.store (0, std::memory_order_relaxed);
         }
 
         // -------------------------------------------------------------------
+        /**
+            Every engine is called on every block, whatever its enable says.
+
+            Each one owns its own bypass and each one is exact - the buffer
+            comes back sample for sample - but what they do *while* bypassed
+            differs, and that difference is the reason the chain must not gate
+            them:
+
+              Retro and Crush keep their delay lines fed, because both read a
+              dry tap from a delayed line.  Stop writing and the first few
+              milliseconds after switching back on are whatever was in the line
+              when it was switched off, which is an audible click on the power
+              button.
+
+              Space, Aura and Shadow flush their tails on the transition
+              instead, so that switching one back on does not replay audio from
+              minutes ago.  They can only do that if they see the transition.
+
+            The chain gating them would have broken both behaviours at once.
+        */
         void runFxSlot (FxSlot slot, juce::AudioBuffer<float>& b,
                         const ParameterRegistry& p, const MacroState& m)
         {
             switch (slot)
             {
-                case FxSlot::retro:
-                    if (p.flag (PID::retroOn))    retro.process (b, p, m);
-                    break;
-
-                case FxSlot::crush:
-                    if (p.flag (PID::crushOn))    crush.process (b, p, m);
-                    break;
-
-                case FxSlot::filter:
-                    if (p.flag (PID::fxFilterOn)) chainFilter.process (b, p, m);
-                    break;
-
-                case FxSlot::rewind:
-                    if (p.flag (PID::rewindOn))   rewind.process (b, p, m);
-                    break;
-
-                case FxSlot::grain:
-                    if (p.flag (PID::grainFxOn))  grain.process (b, p, m);
-                    break;
-
-                case FxSlot::space:
-                    if (p.flag (PID::spaceOn))    space.process (b, p, m);
-                    break;
+                case FxSlot::retro:  retro.process (b, p, m);       break;
+                case FxSlot::crush:  crush.process (b, p, m);       break;
+                case FxSlot::filter: chainFilter.process (b, p, m); break;
+                case FxSlot::rewind: rewind.process (b, p, m);      break;
+                case FxSlot::grain:  grain.process (b, p, m);       break;
+                case FxSlot::space:  space.process (b, p, m);       break;
 
                 case FxSlot::count:
-                default:
-                    break;
+                default:                                            break;
             }
         }
 
@@ -329,6 +369,62 @@ namespace nacar
         }
 
         // -------------------------------------------------------------------
+        /**
+            Publishes this block's modulation into the registry's overlay, so
+            that every `p.raw()` below - in the synth, in all eleven chain
+            engines, in the macro resolver - returns the value actually in
+            force.  This is what makes the MOD page's matrix audible, and it is
+            deliberately the only place that writes the overlay.
+
+            Two things matter here.  The first is that an override that stops
+            being targeted must be REMOVED: leaving it installed would freeze
+            that parameter at whatever the matrix last pushed it to, and the
+            user would find a knob that no longer does anything.  The second is
+            that this runs before the synth renders, so a routing takes effect
+            in the same block it was computed for rather than the next one.
+        */
+        void applyModulation (const ParameterRegistry& p)
+        {
+            const auto& routings = modulation.matrix().liveRoutings();
+
+            PID targets[ModMatrix::numSlots];
+            int numTargets = 0;
+
+            for (const auto& r : routings)
+            {
+                if (! r.enabled || r.target == PID::count || r.source == ModSource::none)
+                    continue;
+
+                // offsetFor() already sums every routing that points at this
+                // parameter, so a target that two slots share is written once.
+                bool seen = false;
+
+                for (int i = 0; i < numTargets && ! seen; ++i)
+                    seen = targets[i] == r.target;
+
+                if (! seen)
+                    targets[numTargets++] = r.target;
+            }
+
+            // Drop last block's overrides that this block no longer wants.
+            for (int i = 0; i < numActiveTargets; ++i)
+            {
+                bool stillTargeted = false;
+
+                for (int j = 0; j < numTargets && ! stillTargeted; ++j)
+                    stillTargeted = targets[j] == activeTargets[i];
+
+                if (! stillTargeted)
+                    p.clearModulation (activeTargets[i]);
+            }
+
+            for (int i = 0; i < numTargets; ++i)
+                p.setModulation (targets[i], modulation.modulationFor (targets[i]));
+
+            std::copy (targets, targets + numTargets, activeTargets);
+            numActiveTargets = numTargets;
+        }
+
         void process (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi,
                       const ParameterRegistry& p, const TransportInfo& transport)
         {
@@ -360,7 +456,6 @@ namespace nacar
                     modulation.setAftertouch ((float) message.getAfterTouchValue() / 127.0f);
             }
 
-            // -- source ------------------------------------------------------
             const bool renderMono = buffer.getNumChannels() < 2;
 
             juce::AudioBuffer<float>& work = renderMono ? stereo : buffer;
@@ -374,9 +469,11 @@ namespace nacar
             juce::AudioBuffer<float> view (work.getArrayOfWritePointers(), 2, numSamples);
             view.clear();
 
-            synth.process (view, midi, p, transport.bpm);
-
             // -- macros and modulation ---------------------------------------
+            //
+            // Before the synth renders, not after: the matrix has to be able to
+            // reach an oscillator, and a modulation that arrives a block late
+            // is a modulation that flams against the note that triggered it.
             MacroState macros;
             resolveMacros (macros, p);
 
@@ -387,8 +484,22 @@ namespace nacar
             macros.transportPlaying = transport.playing;
 
             modulation.updateBlock (macros, p);
+            applyModulation (p);
+
+            // Again, now that the overlay is in place.  The matrix's macro
+            // SOURCES are the knob positions - a user routing MEMORY means the
+            // control they can see - but a macro is also a legal TARGET, and
+            // without this second pass it would be the one dead entry in the
+            // target menu.  There is no loop: the sources were latched above,
+            // from the unmodulated values.
+            resolveMacros (macros, p);
+
+            // -- source ------------------------------------------------------
+            synth.process (view, midi, p, transport.bpm);
 
             // -- the chain ---------------------------------------------------
+            updateLatency (p);
+
             memory.process (view, p, macros);
 
             const auto order = FxOrder::unpack (packedOrder.load (std::memory_order_relaxed));
@@ -401,10 +512,9 @@ namespace nacar
                     runFxSlot (slot, view, p, macros);
             }
 
-            if (p.flag (PID::shadowOn))  shadow.process (view, p, macros);
-            if (p.flag (PID::auraOn))    aura.process (view, p, macros);
-            if (p.flag (PID::patinaOn))  patina.process (view, p, macros);
-
+            shadow.process (view, p, macros);
+            aura.process   (view, p, macros);
+            patina.process (view, p, macros);
             weight.process (view, p, macros);
 
             outputStage (view, macros, numSamples);
@@ -464,6 +574,11 @@ namespace nacar
     }
 
     SynthEngine& NacarEngine::getSynth() noexcept { return impl->synth; }
+
+    int NacarEngine::getLatencySamples() const noexcept
+    {
+        return impl->latencySamples.load (std::memory_order_relaxed);
+    }
 
     void NacarEngine::rebuildModMatrix (const juce::ValueTree& tree)
     {

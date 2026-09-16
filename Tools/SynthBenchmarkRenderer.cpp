@@ -14,7 +14,15 @@
       - spectral balance: dark is not the same as dull          (spec 47)
 
     Usage:
-        NacarBench [--out <dir>] [--rate <hz>] [--no-wav] [<patch-name-filter>]
+        NacarBench [--out <dir>] [--rate <hz>] [--no-wav] [--chain]
+                   [--cpu] [--attribute] [<patch-name-filter>]
+
+        --chain      renders through the whole NACAR chain rather than the
+                     synth alone.
+        --attribute  renders one patch repeatedly, adding one chain stage at a
+                     time, and reports what each stage did to the stereo image.
+                     Use it when a mono retention figure fails: the table names
+                     the stage instead of leaving it to inference.
 
     Writes one WAV per benchmark patch and a measurement table to stdout.
 */
@@ -25,6 +33,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <functional>
 #include <iomanip>
 #include <iostream>
 
@@ -814,13 +823,20 @@ static std::vector<Benchmark> makeBenchmarks()
 /** Renders through the whole instrument rather than the synth alone, so the
     same measurements can be taken of what a listener would actually hear. */
 static juce::AudioBuffer<float> renderThroughChain (const Benchmark& bench,
-                                                    double sampleRate, int blockSize)
+                                                    double sampleRate, int blockSize,
+                                                    const std::function<void (BenchHost&)>& after = {})
 {
     BenchHost host;
     initPatch (host);
 
     if (bench.setup)
         bench.setup (host);
+
+    // The attribution mode uses this to switch one stage off and re-measure,
+    // which is the only way to say WHICH stage widened a patch rather than
+    // guessing from the chain order.
+    if (after)
+        after (host);
 
     NacarEngine engine;
     engine.prepare (sampleRate, blockSize, 2);
@@ -977,7 +993,14 @@ static void writeWav (const juce::File& file, const juce::AudioBuffer<float>& bu
 //  renders forty seconds of audio per second of wall clock, so one instance
 //  costs about 1/40th of the core it ran on.
 // ===========================================================================
-static void measureCpu (double sampleRate, int blockSize)
+/** Cost per block, for the synth alone or for the whole chain.
+
+    Both figures matter and they answer different questions.  The synth-only
+    number says what the voice core costs and scales with polyphony; the chain
+    number adds the chain engines, whose cost is per block rather than per
+    voice, so it barely moves with voice count and dominates at low polyphony.
+    A user holding one pad voice pays almost entirely for the chain. */
+static void measureCpu (double sampleRate, int blockSize, bool throughChain)
 {
     struct Case { const char* name; int voices; int unison; int character; };
 
@@ -990,7 +1013,7 @@ static void measureCpu (double sampleRate, int blockSize)
         { "32 voices, 8x unison",   32, 8, 0 }
     }};
 
-    std::cout << "\nCPU\n"
+    std::cout << "\nCPU  (" << (throughChain ? "whole chain" : "synth only") << ")\n"
               << "  " << sampleRate << " Hz, block " << blockSize << "\n\n"
               << std::left << std::setw (26) << "  CASE"
               << std::right << std::setw (12) << "REALTIME"
@@ -1013,9 +1036,26 @@ static void measureCpu (double sampleRate, int blockSize)
         host.set (PID::ampRelease, 8.0f);
 
         SynthEngine synth;
-        synth.prepare (sampleRate, blockSize, 2);
+        NacarEngine chain;
+
+        if (throughChain) chain.prepare (sampleRate, blockSize, 2);
+        else              synth.prepare (sampleRate, blockSize, 2);
+
+        TransportInfo transport;
+        transport.bpm = 120.0;
+        transport.playing = true;
 
         juce::AudioBuffer<float> block (2, blockSize);
+
+        auto render = [&] (juce::MidiBuffer& midi)
+        {
+            block.clear();
+
+            if (throughChain) chain.process (block, midi, host.registry, transport);
+            else              synth.process (block, midi, host.registry, 120.0);
+
+            transport.ppqPosition += (double) blockSize / sampleRate * (transport.bpm / 60.0);
+        };
 
         // Fill every voice, then render three seconds of all of them sounding.
         {
@@ -1024,8 +1064,7 @@ static void measureCpu (double sampleRate, int blockSize)
             for (int v = 0; v < c.voices; ++v)
                 midi.addEvent (juce::MidiMessage::noteOn (1, 36 + v, 0.9f), 0);
 
-            block.clear();
-            synth.process (block, midi, host.registry, 120.0);
+            render (midi);
         }
 
         const int blocks = (int) (sampleRate * 3.0 / blockSize);
@@ -1033,9 +1072,8 @@ static void measureCpu (double sampleRate, int blockSize)
 
         for (int b = 0; b < blocks; ++b)
         {
-            block.clear();
             juce::MidiBuffer midi;
-            synth.process (block, midi, host.registry, 120.0);
+            render (midi);
         }
 
         const double elapsed = (juce::Time::getMillisecondCounterHiRes() - start) * 0.001;
@@ -1052,6 +1090,173 @@ static void measureCpu (double sampleRate, int blockSize)
     std::cout << "\n  Measured on whatever core this ran on, single threaded,\n"
                  "  with every voice sounding at once - which is the worst case,\n"
                  "  not a typical one.\n";
+
+    if (! throughChain)
+        std::cout << "  This is the voice core alone.  Add --chain for the figure a\n"
+                     "  user actually pays, which includes every chain engine.\n";
+}
+
+// ===========================================================================
+//  Stage attribution
+// ===========================================================================
+/** Mid and side energy, which is what mono retention is actually made of.
+
+    monoRetention = 10*log10(M2 / (M2 + S2)), so a figure worse than -3 dB is
+    not "wide" - it is a signal whose side energy exceeds its mid energy, and
+    naming the stage that put it there is the whole point of this mode. */
+struct MidSide
+{
+    double mid = 0.0, side = 0.0;
+
+    float retentionDb() const
+    {
+        const double total = mid + side;
+        return total < 1.0e-18 ? 0.0f
+                               : (float) (10.0 * std::log10 (juce::jmax (1.0e-12, mid / total)));
+    }
+
+    float sideOverMidDb() const
+    {
+        return mid < 1.0e-18 ? 99.0f
+                             : (float) (10.0 * std::log10 (juce::jmax (1.0e-12, side / mid)));
+    }
+};
+
+static MidSide midSideEnergy (const juce::AudioBuffer<float>& b)
+{
+    MidSide ms;
+
+    if (b.getNumChannels() < 2)
+        return ms;
+
+    const auto* l = b.getReadPointer (0);
+    const auto* r = b.getReadPointer (1);
+
+    for (int i = 0; i < b.getNumSamples(); ++i)
+    {
+        const double m = 0.5 * ((double) l[i] + (double) r[i]);
+        const double s = 0.5 * ((double) l[i] - (double) r[i]);
+        ms.mid  += m * m * 2.0;
+        ms.side += s * s * 2.0;
+    }
+
+    return ms;
+}
+
+/** One line of the attribution table: a chain configuration and what it did to
+    the stereo image. */
+struct Attribution
+{
+    const char* label;
+    std::function<void (BenchHost&)> configure;
+};
+
+static void runAttribution (const juce::String& filter, double sampleRate)
+{
+    // Cumulative, in chain order, so each row's delta is that stage's own
+    // contribution rather than a comparison against a patch nothing has
+    // touched.  SHADOW is off by default and is included only so the table
+    // says so explicitly.
+    const Attribution rows[] =
+    {
+        { "synth only (no chain)", {} },   // handled specially below
+        { "chain, all width off",  [] (BenchHost& h)
+          {
+              h.set (PID::retroOn, 0.0f);   h.set (PID::fxFilterOn, 0.0f);
+              h.set (PID::spaceOn, 0.0f);   h.set (PID::auraOn, 0.0f);
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+              h.set (PID::macroMemory, 0.0f);
+          }},
+        { "+ memory",              [] (BenchHost& h)
+          {
+              h.set (PID::retroOn, 0.0f);   h.set (PID::fxFilterOn, 0.0f);
+              h.set (PID::spaceOn, 0.0f);   h.set (PID::auraOn, 0.0f);
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+          }},
+        { "+ retro",               [] (BenchHost& h)
+          {
+              h.set (PID::fxFilterOn, 0.0f);
+              h.set (PID::spaceOn, 0.0f);   h.set (PID::auraOn, 0.0f);
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+          }},
+        { "+ fx filter",           [] (BenchHost& h)
+          {
+              h.set (PID::spaceOn, 0.0f);   h.set (PID::auraOn, 0.0f);
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+          }},
+        { "+ space",               [] (BenchHost& h)
+          {
+              h.set (PID::auraOn, 0.0f);
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+          }},
+        { "+ aura",                [] (BenchHost& h)
+          {
+              h.set (PID::shadowOn, 0.0f);  h.set (PID::patinaOn, 0.0f);
+          }},
+        { "+ patina (= default)",  [] (BenchHost& h)
+          {
+              h.set (PID::shadowOn, 0.0f);
+          }},
+        { "+ shadow (off by dflt)",[] (BenchHost& h)
+          {
+              h.set (PID::shadowOn, 1.0f);
+          }},
+    };
+
+    std::cout << "NACAR stereo attribution\n"
+                 "  sample rate  " << sampleRate << " Hz\n\n"
+                 "  Each row adds one stage to the one above it, so the change in\n"
+                 "  MONO is that stage's own contribution to the stereo image.\n"
+                 "  SIDE/MID above 0 dB means the side channel carries more energy\n"
+                 "  than the centre, which is what a mono retention worse than\n"
+                 "  -3 dB actually means.\n\n";
+
+    for (const auto& bench : makeBenchmarks())
+    {
+        if (filter.isNotEmpty() && ! juce::String (bench.name).containsIgnoreCase (filter))
+            continue;
+
+        std::cout << bench.name << "  (" << bench.family << ")\n"
+                  << std::left << "  " << std::setw (26) << "STAGE"
+                  << std::right << std::setw (9) << "MONO"
+                  << std::setw (10) << "SIDE/MID"
+                  << std::setw (9) << "DELTA"
+                  << std::setw (9) << "RMS"
+                  << "\n  " << std::string (61, '-') << "\n";
+
+        float previous = 0.0f;
+        bool  havePrevious = false;
+
+        for (const auto& row : rows)
+        {
+            const auto audio = (row.configure == nullptr)
+                                 ? renderBenchmark (bench, sampleRate, 256)
+                                 : renderThroughChain (bench, sampleRate, 256, row.configure);
+
+            const auto ms = midSideEnergy (audio);
+            const float retention = ms.retentionDb();
+
+            std::cout << std::left << "  " << std::setw (26) << row.label
+                      << std::right << std::fixed << std::setprecision (2)
+                      << std::setw (9) << retention
+                      << std::setw (10) << ms.sideOverMidDb();
+
+            if (havePrevious)
+                std::cout << std::setw (8) << (retention - previous) << " ";
+            else
+                std::cout << std::setw (9) << "--";
+
+            std::cout << std::setprecision (1)
+                      << std::setw (9)
+                      << juce::Decibels::gainToDecibels (audio.getRMSLevel (0, 0, audio.getNumSamples()))
+                      << "\n";
+
+            previous = retention;
+            havePrevious = true;
+        }
+
+        std::cout << "\n";
+    }
 }
 
 // ===========================================================================
@@ -1064,6 +1269,7 @@ int main (int argc, char* argv[])
     bool writeFiles = true;
     bool cpuOnly = false;
     bool throughChain = false;
+    bool attribute = false;
     juce::String filter;
 
     for (int i = 1; i < argc; ++i)
@@ -1075,12 +1281,19 @@ int main (int argc, char* argv[])
         else if (arg == "--no-wav")                writeFiles = false;
         else if (arg == "--cpu")                   cpuOnly = true;
         else if (arg == "--chain")                 throughChain = true;
+        else if (arg == "--attribute")             attribute = true;
         else if (! arg.startsWith ("--"))          filter = arg;
     }
 
     if (cpuOnly)
     {
-        measureCpu (sampleRate, 256);
+        measureCpu (sampleRate, 256, throughChain);
+        return 0;
+    }
+
+    if (attribute)
+    {
+        runAttribution (filter, sampleRate);
         return 0;
     }
 

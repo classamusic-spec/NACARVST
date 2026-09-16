@@ -29,6 +29,11 @@ namespace nacar
         void reset();
         void process (juce::AudioBuffer<float>&, const ParameterRegistry&, const MacroState&);
 
+        /** Samples of latency the module adds while it is active: the round
+            trip through the oversampling halfband, which the dry path is
+            delayed to match.  Zero while bypassed. */
+        int getLatencySamples() const noexcept;
+
     private:
         /** Block-rate exponential smoothing, interpolated linearly inside the
             block - the same shape as the Smoother in SynthEngine.cpp, kept

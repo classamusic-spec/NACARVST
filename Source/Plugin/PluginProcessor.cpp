@@ -23,7 +23,16 @@ namespace nacar
 
     NacarProcessor::~NacarProcessor()
     {
+        cancelPendingUpdate();
         stateManager.session().removeListener (this);
+    }
+
+    void NacarProcessor::handleAsyncUpdate()
+    {
+        const int latency = engine.getLatencySamples();
+
+        if (latency != getLatencySamples())
+            setLatencySamples (latency);
     }
 
     // -----------------------------------------------------------------------
@@ -203,6 +212,14 @@ namespace nacar
 
         updateMeters (buffer);
         pushScope (buffer);
+
+        // The chain's latency changes when a module is switched on or off.
+        // Noticing it here is lock-free; reporting it is not, so that happens
+        // on the message thread.
+        const int latency = engine.getLatencySamples();
+
+        if (latency != reportedLatency.exchange (latency, std::memory_order_relaxed))
+            triggerAsyncUpdate();
     }
 
     void NacarProcessor::pushScope (const juce::AudioBuffer<float>& buffer) noexcept

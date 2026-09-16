@@ -376,6 +376,11 @@ namespace nacar
     RetroEngine::RetroEngine() = default;
     RetroEngine::~RetroEngine() = default;
 
+    int RetroEngine::getLatencySamples() const noexcept
+    {
+        return nominalDelay;
+    }
+
     void RetroEngine::prepare (const EngineSpec& spec)
     {
         sr = juce::jmax (8000.0, spec.sampleRate);

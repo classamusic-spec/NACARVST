@@ -682,8 +682,8 @@ namespace nacar::ui
                 applySyncVisibility (i);
 
             const float hash = (float) params.choice (l.shape) * 7.31f
-                             + params.raw (l.depth) * 3.17f
-                             + params.raw (l.phase) * 1.13f;
+                             + params.userValue (l.depth) * 3.17f
+                             + params.userValue (l.phase) * 1.13f;
 
             if (std::abs (hash - l.previewHash) > 1.0e-5f)
             {
@@ -694,8 +694,8 @@ namespace nacar::ui
 
         for (auto& e : env)
         {
-            const float hash = params.raw (e.attack) * 1.7f + params.raw (e.decay) * 2.3f
-                             + params.raw (e.sustain) * 3.1f + params.raw (e.release) * 4.7f;
+            const float hash = params.userValue (e.attack) * 1.7f + params.userValue (e.decay) * 2.3f
+                             + params.userValue (e.sustain) * 3.1f + params.userValue (e.release) * 4.7f;
 
             if (std::abs (hash - e.previewHash) > 1.0e-5f)
             {
@@ -705,10 +705,10 @@ namespace nacar::ui
         }
 
         {
-            const float hash = params.raw (PID::breathAmount) * 1.7f
-                             + params.raw (PID::breathSpeed)  * 2.9f
-                             + params.raw (PID::breathRandom) * 3.7f
-                             + params.raw (PID::breathShape)  * 5.3f;
+            const float hash = params.userValue (PID::breathAmount) * 1.7f
+                             + params.userValue (PID::breathSpeed)  * 2.9f
+                             + params.userValue (PID::breathRandom) * 3.7f
+                             + params.userValue (PID::breathShape)  * 5.3f;
 
             if (std::abs (hash - breathHash) > 1.0e-5f)
             {
@@ -852,22 +852,22 @@ namespace nacar::ui
         {
             section (g, l.bounds.toFloat(), l.caption, icons::Icon::wave3);
             drawLfoPreview (g, l.preview.toFloat(), params.choice (l.shape),
-                            params.raw (l.depth), params.raw (l.phase));
+                            params.userValue (l.depth), params.userValue (l.phase));
         }
 
         for (auto& e : env)
         {
             section (g, e.bounds.toFloat(), e.caption, icons::Icon::triangle);
             drawEnvelopePreview (g, e.preview.toFloat(),
-                                 params.raw (e.attack), params.raw (e.decay),
-                                 params.raw (e.sustain), params.raw (e.release));
+                                 params.userValue (e.attack), params.userValue (e.decay),
+                                 params.userValue (e.sustain), params.userValue (e.release));
         }
 
         // Breath says what it is in its own caption: it is not an LFO.
         section (g, breathBounds.toFloat(), "BREATH   ORGANIC, NON-REPEATING", icons::Icon::wave3);
         drawBreathPreview (g, breathPreview.toFloat(),
-                           params.raw (PID::breathAmount), params.raw (PID::breathSpeed),
-                           params.raw (PID::breathRandom), params.raw (PID::breathShape));
+                           params.userValue (PID::breathAmount), params.userValue (PID::breathSpeed),
+                           params.userValue (PID::breathRandom), params.userValue (PID::breathShape));
 
         section (g, pulseBounds.toFloat(), "PULSE", icons::Icon::meterBars);
 

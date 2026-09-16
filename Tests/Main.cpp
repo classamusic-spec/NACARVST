@@ -14,6 +14,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <tuple>
+
 #include "../Source/Plugin/ParameterRegistry.h"
 #include "../Source/Plugin/StateManager.h"
 #include "../Source/Audio/Sources/Synth/SynthEngine.h"
@@ -1293,6 +1295,47 @@ struct ChainTests : juce::UnitTest
             const double db = 10.0 * std::log10 (juce::jmax (1.0e-18, diff / signal));
             logMessage ("    silent-chain mid difference: " + juce::String (db, 1) + " dB");
 
+            {
+                // When this fails, the shape of the failure says what caused it:
+                // a level change, a delay, or a filter.
+                double chainEnergy = 0.0;
+
+                for (int i = 0; i < refAll.getNumSamples(); ++i)
+                {
+                    const double m = 0.5 * ((double) chain.audio.getSample (0, i)
+                                            + (double) chain.audio.getSample (1, i));
+                    chainEnergy += m * m;
+                }
+
+                logMessage ("    reference mid rms "
+                            + juce::String (std::sqrt (signal / refAll.getNumSamples()), 5)
+                            + ", chain mid rms "
+                            + juce::String (std::sqrt (chainEnergy / refAll.getNumSamples()), 5));
+
+                // Best alignment over a short search: a non-zero best lag means
+                // something in the chain is delaying the signal.
+                int bestLag = 0;
+                double bestDiff = 1.0e30;
+
+                for (int lag = 0; lag < 400; ++lag)
+                {
+                    double d = 0.0;
+
+                    for (int i = 0; i < refAll.getNumSamples() - lag; i += 7)
+                    {
+                        const double a = 0.5 * ((double) refAll.getSample (0, i)
+                                                + (double) refAll.getSample (1, i));
+                        const double b = 0.5 * ((double) chain.audio.getSample (0, i + lag)
+                                                + (double) chain.audio.getSample (1, i + lag));
+                        d += (b - a) * (b - a);
+                    }
+
+                    if (d < bestDiff) { bestDiff = d; bestLag = lag; }
+                }
+
+                logMessage ("    best alignment at lag " + juce::String (bestLag) + " samples");
+            }
+
             expect (db < -60.0, "a module that is off is still colouring the signal: "
                                     + juce::String (db, 1) + " dB of difference");
         }
@@ -1433,7 +1476,284 @@ struct ChainTests : juce::UnitTest
 };
 
 // ===========================================================================
+//  MOD MATRIX
+//
+//  The matrix is the one subsystem whose failure mode is silence rather than
+//  noise: the MOD page can persist a perfectly valid routing and the sound can
+//  be completely unaffected, which looks like working software.  These tests
+//  exist to make that failure loud.
+// ===========================================================================
+struct ModMatrixTests : juce::UnitTest
+{
+    ModMatrixTests() : juce::UnitTest ("Mod matrix", "nacar") {}
+
+    /** A MODMATRIX branch the way the MOD page writes one. */
+    static juce::ValueTree makeMatrix (std::initializer_list<std::tuple<const char*, PID, float>> slots)
+    {
+        juce::ValueTree matrix (ids::MODMATRIX);
+
+        for (const auto& [source, target, depth] : slots)
+        {
+            juce::ValueTree slot (ids::MODSLOT);
+            slot.setProperty (ids::modSource,  source, nullptr);
+            slot.setProperty (ids::modTarget,  ParameterRegistry::idOf (target), nullptr);
+            slot.setProperty (ids::modDepth,   depth, nullptr);
+            slot.setProperty (ids::modEnabled, true, nullptr);
+            matrix.appendChild (slot, nullptr);
+        }
+
+        return matrix;
+    }
+
+    static void render (NacarEngine& engine, const ParameterRegistry& params,
+                        int numBlocks, int blockSize = 256, double sampleRate = 48000.0)
+    {
+        juce::AudioBuffer<float> block (2, blockSize);
+
+        TransportInfo transport;
+        transport.bpm = 120.0;
+        transport.playing = true;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            block.clear();
+            juce::MidiBuffer midi;
+
+            if (b == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 45, 0.9f), 0);
+
+            engine.process (block, midi, params, transport);
+            transport.ppqPosition += (double) blockSize / sampleRate * (transport.bpm / 60.0);
+        }
+    }
+
+    void runTest() override
+    {
+        beginTest ("an unrouted parameter reads exactly what the user set");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::filterCutoff, 4000.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            render (engine, host.registry, 8);
+
+            expectWithinAbsoluteError (host.registry.raw (PID::filterCutoff),
+                                       host.registry.userValue (PID::filterCutoff),
+                                       0.001f);
+        }
+
+        beginTest ("a routed parameter moves, and keeps moving");
+        {
+            // The whole point.  An LFO on the cutoff has to produce a cutoff
+            // that is (a) not the user's value and (b) different at different
+            // moments, or the matrix is a preference the instrument ignores.
+            TestHost host;
+            host.registry.setFromUI (PID::filterCutoff, 2000.0f);
+            host.registry.setFromUI (PID::lfo1Rate, 4.0f);
+            host.registry.setFromUI (PID::lfo1Depth, 1.0f);
+            host.registry.setFromUI (PID::lfo1Sync, 0.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            engine.rebuildModMatrix (makeMatrix ({ { "LFO 1", PID::filterCutoff, 1.0f } }));
+
+            float lowest  = 1.0e9f;
+            float highest = -1.0e9f;
+
+            for (int b = 0; b < 240; ++b)
+            {
+                render (engine, host.registry, 1);
+
+                const float v = host.registry.raw (PID::filterCutoff);
+                lowest  = juce::jmin (lowest, v);
+                highest = juce::jmax (highest, v);
+            }
+
+            logMessage ("    cutoff swept " + juce::String (lowest, 1) + " Hz to "
+                            + juce::String (highest, 1) + " Hz around a set 2000 Hz");
+
+            expect (highest - lowest > 100.0f,
+                    "an LFO routed to the cutoff at full depth did not move it");
+
+            // The user's own value is untouched: a modulated parameter must not
+            // creep, or a preset saved while an LFO runs saves the LFO's
+            // position rather than the user's setting.
+            expectWithinAbsoluteError (host.registry.userValue (PID::filterCutoff),
+                                       2000.0f, 0.5f);
+        }
+
+        beginTest ("modulation never pushes a parameter out of its own range");
+        {
+            // Depth +1 from a source pinned at +1, on a parameter already at
+            // its maximum.  Clamping is what stops a matrix from producing a
+            // negative frequency or a resonance above self-oscillation.
+            TestHost host;
+
+            const auto& def = ParameterRegistry::definition (PID::filterCutoff);
+
+            host.registry.setFromUI (PID::filterCutoff, def.maxValue);
+            host.registry.setFromUI (PID::macroMemory, 1.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            engine.rebuildModMatrix (makeMatrix ({ { "MEMORY", PID::filterCutoff, 1.0f } }));
+            render (engine, host.registry, 16);
+
+            expect (host.registry.raw (PID::filterCutoff) <= def.maxValue + 0.001f,
+                    "modulation pushed the cutoff past its maximum");
+
+            host.registry.setFromUI (PID::filterCutoff, def.minValue);
+            engine.rebuildModMatrix (makeMatrix ({ { "MEMORY", PID::filterCutoff, -1.0f } }));
+            render (engine, host.registry, 16);
+
+            expect (host.registry.raw (PID::filterCutoff) >= def.minValue - 0.001f,
+                    "modulation pushed the cutoff below its minimum");
+        }
+
+        beginTest ("removing a routing gives the parameter back");
+        {
+            // The failure this catches is a parameter left frozen at whatever
+            // the matrix last pushed it to - a knob that has stopped working
+            // and gives no clue why.
+            TestHost host;
+            host.registry.setFromUI (PID::filterCutoff, 800.0f);
+            host.registry.setFromUI (PID::macroMemory, 1.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            engine.rebuildModMatrix (makeMatrix ({ { "MEMORY", PID::filterCutoff, 0.5f } }));
+            render (engine, host.registry, 16);
+
+            expect (host.registry.raw (PID::filterCutoff) > 900.0f,
+                    "the routing had no effect, so the release cannot be tested");
+
+            engine.rebuildModMatrix (juce::ValueTree (ids::MODMATRIX));
+            render (engine, host.registry, 16);
+
+            expectWithinAbsoluteError (host.registry.raw (PID::filterCutoff), 800.0f, 0.5f);
+        }
+
+        beginTest ("a routing changes what the instrument sounds like");
+        {
+            // The registry test above proves the number moved.  This one proves
+            // the audio did, which is a different claim: an overlay that
+            // engines never read would pass the first and fail this.
+            auto renderToBuffer = [this] (bool routed)
+            {
+                TestHost host;
+                host.registry.setFromUI (PID::filterCutoff, 1200.0f);
+                host.registry.setFromUI (PID::filterResonance, 0.3f);
+                host.registry.setFromUI (PID::macroMemory, 0.0f);
+                host.registry.setFromUI (PID::macroMotion, 1.0f);
+                host.registry.setFromUI (PID::lfo1Rate, 3.0f);
+                host.registry.setFromUI (PID::lfo1Depth, 1.0f);
+                host.registry.setFromUI (PID::lfo1Sync, 0.0f);
+
+                NacarEngine engine;
+                engine.prepare (48000.0, 256, 2);
+
+                if (routed)
+                    engine.rebuildModMatrix (makeMatrix ({ { "LFO 1", PID::filterCutoff, 0.9f } }));
+
+                juce::AudioBuffer<float> out (2, 256 * 120);
+                out.clear();
+
+                juce::AudioBuffer<float> block (2, 256);
+                TransportInfo transport;
+                transport.bpm = 120.0;
+                transport.playing = true;
+
+                for (int b = 0; b < 120; ++b)
+                {
+                    block.clear();
+                    juce::MidiBuffer midi;
+
+                    if (b == 0)
+                        midi.addEvent (juce::MidiMessage::noteOn (1, 45, 0.9f), 0);
+
+                    engine.process (block, midi, host.registry, transport);
+                    transport.ppqPosition += 256.0 / 48000.0 * 2.0;
+
+                    for (int ch = 0; ch < 2; ++ch)
+                        out.copyFrom (ch, b * 256, block, ch, 0, 256);
+                }
+
+                return out;
+            };
+
+            const auto plain  = renderToBuffer (false);
+            const auto routed = renderToBuffer (true);
+
+            double difference = 0.0, reference = 0.0;
+
+            for (int i = 0; i < plain.getNumSamples(); ++i)
+            {
+                const double d = (double) routed.getSample (0, i) - plain.getSample (0, i);
+                difference += d * d;
+                reference  += (double) plain.getSample (0, i) * plain.getSample (0, i);
+
+                expect (std::isfinite (routed.getSample (0, i)),
+                        "the routed render produced a non-finite sample");
+            }
+
+            const double db = 10.0 * std::log10 (juce::jmax (1.0e-12, difference
+                                                                 / juce::jmax (1.0e-12, reference)));
+
+            logMessage ("    routed vs unrouted difference: " + juce::String (db, 1) + " dB");
+
+            expect (db > -20.0,
+                    "a full-depth LFO on the cutoff changed the audio by only "
+                        + juce::String (db, 1) + " dB, so the overlay is not reaching the engines");
+        }
+
+        beginTest ("a target that no longer exists is inert, not wrong");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::filterCutoff, 3000.0f);
+
+            juce::ValueTree matrix (ids::MODMATRIX);
+            juce::ValueTree slot (ids::MODSLOT);
+            slot.setProperty (ids::modSource,  "MEMORY", nullptr);
+            slot.setProperty (ids::modTarget,  "a_parameter_that_was_removed", nullptr);
+            slot.setProperty (ids::modDepth,   1.0f, nullptr);
+            slot.setProperty (ids::modEnabled, true, nullptr);
+            matrix.appendChild (slot, nullptr);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+            engine.rebuildModMatrix (matrix);
+            render (engine, host.registry, 8);
+
+            expectWithinAbsoluteError (host.registry.raw (PID::filterCutoff), 3000.0f, 0.5f);
+        }
+
+        beginTest ("the per-voice sources are declared unavailable, not faked");
+        {
+            // ENV 1, ENV 2, VELOCITY and KEY TRACK only exist inside a sounding
+            // voice and the matrix is a block-rate, global thing.  They read
+            // zero on purpose.  If someone later wires a global stand-in for
+            // them, this test should fail and make them say so.
+            TestHost host;
+            host.registry.setFromUI (PID::filterCutoff, 2500.0f);
+
+            NacarEngine engine;
+            engine.prepare (48000.0, 256, 2);
+
+            for (auto* source : { "ENV 1", "ENV 2", "VELOCITY", "KEY TRACK" })
+            {
+                engine.rebuildModMatrix (makeMatrix ({ { source, PID::filterCutoff, 1.0f } }));
+                render (engine, host.registry, 8);
+
+                expectWithinAbsoluteError (host.registry.raw (PID::filterCutoff), 2500.0f, 0.5f);
+            }
+        }
+    }
+};
+
+// ===========================================================================
 static ModulationTests     modulationTests;
+static ModMatrixTests      modMatrixTests;
 static ChainTests          chainTests;
 static HalfbandTests       halfbandTests;
 static ParameterTableTests parameterTableTests;

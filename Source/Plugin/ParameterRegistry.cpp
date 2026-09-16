@@ -159,6 +159,14 @@ namespace nacar
     // -----------------------------------------------------------------------
     //  Attachment
     // -----------------------------------------------------------------------
+    ParameterRegistry::ParameterRegistry()
+    {
+        // std::atomic<float> is not zero-initialised by its default
+        // constructor, and an indeterminate override would make raw() return
+        // garbage for every parameter before the first block.
+        clearAllModulation();
+    }
+
     void ParameterRegistry::attach (juce::AudioProcessorValueTreeState& s)
     {
         apvts = &s;
@@ -188,10 +196,53 @@ namespace nacar
         return 0.0f;
     }
 
+    float ParameterRegistry::normalisedUserValue (PID p) const noexcept
+    {
+        if (auto* rp = params[(size_t) p])
+            return rp->convertTo0to1 (userValue (p));
+
+        return 0.0f;
+    }
+
+    // -----------------------------------------------------------------------
+    //  The modulation overlay
+    // -----------------------------------------------------------------------
+    void ParameterRegistry::setModulation (PID p, float normalisedOffset) const noexcept
+    {
+        auto* rp = params[(size_t) p];
+
+        if (rp == nullptr || values[(size_t) p] == nullptr)
+            return;
+
+        // Clamped in NORMALISED space, before the range's own skew is undone.
+        // Clamping the real value instead would let a skewed parameter - every
+        // frequency in the instrument - travel a different distance upwards
+        // than downwards for the same depth, which reads as a matrix that is
+        // stronger in one direction.
+        const float base = rp->convertTo0to1 (values[(size_t) p]->load (std::memory_order_relaxed));
+        const float sum  = juce::jlimit (0.0f, 1.0f, base + normalisedOffset);
+
+        modOverride[(size_t) p].store (rp->convertFrom0to1 (sum), std::memory_order_relaxed);
+    }
+
+    void ParameterRegistry::clearModulation (PID p) const noexcept
+    {
+        modOverride[(size_t) p].store (noModulation, std::memory_order_relaxed);
+    }
+
+    void ParameterRegistry::clearAllModulation() const noexcept
+    {
+        for (auto& m : modOverride)
+            m.store (noModulation, std::memory_order_relaxed);
+    }
+
     juce::String ParameterRegistry::formatValue (PID p) const
     {
         const auto& d = definition (p);
-        const float v = raw (p);
+
+        // userValue, not raw: this feeds tooltips and typed value entry, and a
+        // field that moves while an LFO is running cannot be typed into.
+        const float v = userValue (p);
 
         if (d.kind == ParamKind::boolean)
             return v > 0.5f ? "ON" : "OFF";

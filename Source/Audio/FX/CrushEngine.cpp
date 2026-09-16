@@ -214,6 +214,11 @@ namespace nacar
     CrushEngine::CrushEngine() = default;
     CrushEngine::~CrushEngine() = default;
 
+    int CrushEngine::getLatencySamples() const noexcept
+    {
+        return (synth::kHalfbandTaps - 1) / 2;
+    }
+
     void CrushEngine::prepare (const EngineSpec& spec)
     {
         sr = juce::jmax (8000.0, spec.sampleRate);

@@ -132,8 +132,10 @@
     each, so leakage above 11 kHz is attenuated by at least 16 dB before being
     squared - see the limitations for what that does and does not prove.
 
-    The band compressor runs on the high band, which is also what keeps the
-    generated air from turning into a sibilant edge.
+    The band compressor runs on the high band.  Given what it does - lift the
+    tail, leave the attack alone - what that means here is that the top of a
+    note's decay comes up rather than the top of its transient, which is where
+    air actually lives.  It is not a de-esser and it will not tame one.
 
     -----------------------------------------------------------------------
     weight_compress - dynamic control INSIDE the band
@@ -141,19 +143,29 @@
 
     One compressor design, used by all three modes on their own band:
 
-        threshold   half of a 300 ms envelope of the band itself, so the
-                    compressor always works around the material's own level
-                    rather than an absolute one.  A weight stage should behave
-                    the same way at -20 dBFS as at -6.
-        ratio       1:1 to 2.5:1 across weight_compress.  Gentle, by design:
+        threshold   half of the band's own recent level rather than an
+                    absolute one, so the stage behaves the same at -20 dBFS as
+                    at -6.
+        detection   program-dependent, feed-forward, no lookahead, linked
+                    across the two channels.  The detector releases in 120 ms,
+                    the reference in 400 ms, and BOTH ATTACK IN 8 ms.
+        ratio       1:1 to 2.5:1 across weight_compress.  Gentle by design:
                     this is a weight stage, not a limiter.
-        detection   program-dependent, feed-forward, no lookahead.  8 ms up,
-                    120 ms down, linked across the two channels.
-        makeup      normalised at twice the threshold, which is roughly the
-                    average operating point.  Peaks come down, the average
-                    stays put, quiet passages come up: density at constant
-                    average level, which is what makes weight feel solid
-                    rather than peaky.
+        makeup      normalised at twice the threshold - which, because the two
+                    followers share an attack, is exactly where the detector
+                    sits during any rise.  The gain during a note's attack is
+                    therefore exactly 1.0 from silence, from a cold follower,
+                    from anywhere.  (Below the detector's absolute floor of
+                    1e-5 the gain is the makeup instead, which is +3.6 dB
+                    applied to something quieter than -100 dBFS.  Simulated
+                    over a note from silence at 44.1 and 96 kHz, the gain never
+                    leaves [1.0, 1.516].)
+
+    What that adds up to is a stage that lifts the tail of a note towards its
+    peak and never touches the attack: the band's sustain comes up, its peaks
+    do not, and the output trim then takes the level back out - which lowers
+    the peaks relative to the body of the sound without ever having reached for
+    them directly.  The compressor itself only ever raises, by at most 3.6 dB.
 
     Because the threshold is derived from the input band and never from the
     output, there is no feedback path anywhere in this engine.
@@ -173,8 +185,10 @@
          expects to have produced, from its own controls and a fixed assumption
          about how much of a mix's power lives in its band (35 % below 110 Hz,
          40 % in the low mids, 12 % above 6 kHz).  The reciprocal square root of
-         that is applied as a static trim.  It is an estimate about a spectrum
-         this engine cannot see, so it is deliberately conservative.
+         that is applied as a static trim.  Each mode's estimate is written to
+         mirror the structure of its own process() line for line, so the two
+         cannot drift apart.  It is still an estimate about a spectrum this
+         engine cannot see, so it is deliberately conservative.
 
       3  MEASURED RESIDUAL.  Two loudness meters, one on the input and one on
          the output, each a K-weighting-like pre-filter (two poles of highpass
@@ -199,10 +213,14 @@
     which is the authoritative source and is guaranteed to be populated.
 
     BYPASS.  With macro_weight at zero and the fade run out, process() returns
-    before touching the buffer.  Even before that point the path is exact by
-    construction: every mode is written as `in + amount * (something)` over
-    complementary band splits that reconstruct their input, and the output gain
-    is `1 + amount * (trim - 1)`, so amount = 0 is the identity.
+    before touching the buffer at all: that path is bit-exact.  Before the fade
+    runs out the path is exact by construction rather than by arithmetic - every
+    mode is written as `in + amount * (something)` over complementary band
+    splits, and the output gain is `1 + amount * (trim - 1)`, so amount = 0 is
+    the identity - but a complementary split reconstructs its input to within
+    one float ulp rather than bitwise.  Measured at about 1.5e-8 on a 0.7
+    amplitude signal, which is -153 dB, and only reachable during the 20 ms
+    while the control is fading to zero.
 
     KNOWN LIMITATIONS - read these before believing anything above.
 
@@ -242,6 +260,9 @@
         crossfade.
       - The band compressor has no lookahead and no soft knee in the classical
         sense; the knee comes from the relative threshold, not from the curve.
+        It also cannot reduce gain at all - see its own comment for why that is
+        deliberate - so anything that needs a peak held down needs the limiter
+        that is not this engine's job.
 */
 
 namespace nacar
@@ -339,17 +360,47 @@ namespace nacar
         // ===================================================================
         //  BAND COMPRESSOR
         //
-        //  See the header for the design.  Feed-forward, linked, relative
-        //  threshold, gentle ratio, makeup normalised at the operating point.
+        //  The threshold is not a level.  It is half of the band's own recent
+        //  level, so the stage behaves the same way at -20 dBFS as at -6.
+        //
+        //  The detector and the reference SHARE AN ATTACK TIME and differ only
+        //  in release, and that single decision is what makes this safe to put
+        //  on the last stage of an instrument:
+        //
+        //    during any rise the two followers are identical, so the detector
+        //    sits at exactly twice the threshold - which is the point the
+        //    makeup is normalised at - and the gain is exactly 1.0.  A note's
+        //    attack cannot be ducked by this stage: not from silence, not after
+        //    a mode change, not with a cold follower.  A reference that lagged
+        //    the detector would collapse the gain every time a note started
+        //    from nothing, which is the obvious way to write this and is wrong.
+        //
+        //    after a peak the detector falls in 120 ms while the reference
+        //    holds for 400 ms, so the tail of a note sits below the operating
+        //    point and is lifted.  The band's sustain comes up relative to its
+        //    peaks, which is the density a weight stage is after.
+        //
+        //  It follows that this compressor only ever raises, bounded by the
+        //  makeup, which is at most 1.52 (+3.6 dB) at weight_compress = 1.  The
+        //  downward half of the job belongs to the output trim, which takes the
+        //  resulting level rise back out and so lowers the peaks relative to
+        //  the body of the sound.
         // ===================================================================
         struct BandCompressor
         {
             Follower fast, slow;
 
-            void prepare (double sampleRate) noexcept
+            /** @param attackSeconds  must be longer than the period of the
+                                        lowest frequency in the band, or the
+                                        detector follows the waveform instead
+                                        of its envelope and the gain ripples at
+                                        twice the fundamental.  SUB passes
+                                        25 ms for that reason; 8 ms is right
+                                        for the two bands above it. */
+            void prepare (double sampleRate, float attackSeconds = 0.008f) noexcept
             {
-                fast.prepare (0.008f, 0.120f, sampleRate);
-                slow.prepare (0.200f, 0.500f, sampleRate);
+                fast.prepare (attackSeconds, 0.120f, sampleRate);
+                slow.prepare (attackSeconds, 0.400f, sampleRate);   // same attack, see above
             }
 
             void reset() noexcept { fast.reset(); slow.reset(); }
@@ -377,9 +428,25 @@ namespace nacar
                 if (e <= thr)
                     return makeup;
 
-                return exp2Fast (expo * log2Fast (e / thr)) * makeup;
+                // e never exceeds s, so e/thr never exceeds 2 and the result
+                // never leaves [1, makeup].  The clamp is insurance, not range.
+                return juce::jlimit (0.5f, 2.0f, exp2Fast (expo * log2Fast (e / thr)) * makeup);
             }
         };
+
+        /** What the band compressor is worth, on average, at a given depth.
+
+            Its gain runs between 1.0 (during any rise) and its makeup (deep in
+            a decay), so a third of the way up is a fair estimate of where it
+            spends its time.  Only the feed-forward trim uses this; the measured
+            residual does not care whether the estimate was good. */
+        inline float compressorAverageGain (float depth) noexcept
+        {
+            const float d = juce::jlimit (0.0f, 1.0f, depth);
+            const float makeup = exp2Fast (1.5f * d / (1.0f + 1.5f * d));
+
+            return 1.0f + 0.35f * (makeup - 1.0f);
+        }
 
         // ===================================================================
         //  SUB
@@ -405,7 +472,10 @@ namespace nacar
                 dc.prepare (sampleRate);
                 harmonicHp.setCutoff (kSubGeneratorLowHz, sampleRate);
                 harmonicLp.setCutoff (kSubGeneratorHighHz, sampleRate);
-                comp.prepare (sampleRate);
+
+                // 25 ms: longer than one cycle of the lowest note this band
+                // carries, so the detector measures the note and not the wave.
+                comp.prepare (sampleRate, 0.025f);
                 reset();
             }
 
@@ -419,13 +489,16 @@ namespace nacar
 
             void wake (float level) noexcept { env.set (level); comp.seed (level); }
 
-            /** Expected broadband power ratio, for the feed-forward trim. */
-            static float powerRatio (float amount, float harmonics) noexcept
+            /** Expected broadband power ratio, for the feed-forward trim.
+                Written to mirror the structure of process() exactly, so that
+                the estimate cannot drift away from what the code does. */
+            static float powerRatio (float amount, float harmonics, float compress) noexcept
             {
-                const float lift = 1.0f + kSubLift * amount;
+                const float band = lerp (1.0f, (1.0f + kSubLift)
+                                               * compressorAverageGain (compress * amount), amount);
                 const float gen  = kSubHarmonic * amount * harmonics;
 
-                return 1.0f + kLowShare * (lift * lift - 1.0f + gen * gen);
+                return 1.0f + kLowShare * (band * band - 1.0f + gen * gen);
             }
 
             forcedinline void process (float inL, float inR, float& outL, float& outR,
@@ -491,9 +564,10 @@ namespace nacar
 
             void wake (float level) noexcept { comp.seed (level); }
 
-            static float powerRatio (float amount, float /*harmonics*/) noexcept
+            static float powerRatio (float amount, float /*harmonics*/, float compress) noexcept
             {
-                const float band = 1.0f + amount * (kBodyMakeup - 1.0f);
+                const float band = lerp (1.0f, kBodyMakeup
+                                               * compressorAverageGain (compress * amount), amount);
                 const float low  = 1.0f + kBodyLowLift * amount;
 
                 return 1.0f + kMidShare * (band * band - 1.0f)
@@ -612,9 +686,10 @@ namespace nacar
 
             void wake (float level) noexcept { comp.seed (level); }
 
-            static float powerRatio (float amount, float harmonics) noexcept
+            static float powerRatio (float amount, float harmonics, float compress) noexcept
             {
-                const float shelf = 1.0f + kAirShelfDepth * amount;
+                const float shelf = lerp (1.0f, (1.0f + kAirShelfDepth * amount)
+                                                * compressorAverageGain (compress * amount), amount);
                 const float gen   = kAirGenDepth * amount * harmonics;
 
                 return 1.0f + kHighShare * (shelf * shelf - 1.0f + gen * gen);
@@ -811,10 +886,11 @@ namespace nacar
             // -- the gain that keeps this stage honest ------------------------
             const float a = amount.value();
             const float h = harmonics.value();
+            const float c = compress.value();
 
-            const float ratio = modeGain[0] * SubMode ::powerRatio (a, h)
-                              + modeGain[1] * BodyMode::powerRatio (a, h)
-                              + modeGain[2] * AirMode ::powerRatio (a, h);
+            const float ratio = modeGain[0] * SubMode ::powerRatio (a, h, c)
+                              + modeGain[1] * BodyMode::powerRatio (a, h, c)
+                              + modeGain[2] * AirMode ::powerRatio (a, h, c);
 
             const float sumGain = juce::jmax (1.0e-6f, modeGain[0] + modeGain[1] + modeGain[2]);
             const float staticTrim = 1.0f / std::sqrt (juce::jmax (0.05f, ratio / sumGain));

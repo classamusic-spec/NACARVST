@@ -55,8 +55,9 @@ namespace nacar
         float rateFor (float u) const noexcept;
 
         // -- fixed configuration --------------------------------------------
+        //  EngineSpec::maxBlockSize is deliberately not stored: Rewind needs no
+        //  per-block scratch, so there is nothing for it to size.
         double sampleRate = 48000.0;
-        int    maxBlock = 512;
 
         float  xfadeSamples = 288.0f;      ///< read-position crossfade, 6 ms
         float  maxRateDelta = 0.035f;      ///< per sample; full range in ~3 ms

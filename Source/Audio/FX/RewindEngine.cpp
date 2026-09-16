@@ -53,6 +53,13 @@
                   early it jumps back again, which is what makes this one read
                   as a stutter rather than as a single repeat.
 
+    INTEGRATION NOTE.  Rewind must be given every block, including blocks in
+    which rewind_on is false or the slot is bypassed, or its history goes stale
+    and the first gesture after it is switched on plays back whatever was in
+    the buffer minutes ago.  The engine bypasses itself internally and is
+    bit-exact when idle, so calling it unconditionally costs one circular write
+    per sample and nothing else.
+
     ----------------------------------------------------------------------
     CLICK-FREE STRATEGY  -  the hard requirement
     ----------------------------------------------------------------------
@@ -207,6 +214,12 @@
         older tap.  Two nested jumps inside 6 ms would need a third tap; the
         lockout makes it unreachable in practice but it is not impossible
         through automation of rewind_div.
+      * A REVERSE gesture is shortened when SPEED is high: the tap digs back
+        at (1 + SPEED) samples per sample, so at SPEED 4 the longest window the
+        history can support is about 2.2 s rather than the 2 bars the division
+        may be asking for.  The duration is clamped at trigger time, which is
+        preferable to clamping the position mid-gesture - that would be a rate
+        discontinuity in the middle of the sweep.
       * The SPEED control means "playback rate" in REVERSE and RETURN but
         "how fast the gesture happens" in STOP and DIVE.  That is deliberate -
         a tape stop's speed is its duration - but it does mean one control has
@@ -250,7 +263,6 @@ namespace nacar
     void RewindEngine::prepare (const EngineSpec& spec)
     {
         sampleRate = juce::jmax (8000.0, spec.sampleRate);
-        maxBlock   = juce::jmax (1, spec.maxBlockSize);
 
         history.prepare (sampleRate, kHistorySeconds);
 

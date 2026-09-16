@@ -76,7 +76,7 @@ namespace nacar::ui
         int boundIndex (const ParameterRegistry& r, PID p, int fallback)
         {
             if (r.parameter (p) != nullptr)
-                return (int) r.raw (p);
+                return (int) r.userValue (p);
 
             return fallback;
         }
@@ -238,7 +238,7 @@ namespace nacar::ui
     ParamControl::ParamControl (const ParameterRegistry& registry, PID parameterID)
         : params (registry), pid (parameterID)
     {
-        displayValue = targetValue = params.normalised (pid);
+        displayValue = targetValue = params.normalisedUserValue (pid);
 
         refreshTooltip();
         startTimerHz (30);
@@ -253,7 +253,7 @@ namespace nacar::ui
     float ParamControl::getRealValue() const noexcept
     {
         // Round-tripped through the parameter's own range, which is exact.
-        return realFrom (params, pid, params.normalised (pid));
+        return realFrom (params, pid, params.normalisedUserValue (pid));
     }
 
     void ParamControl::setDragSensitivity (float pixels) noexcept
@@ -287,7 +287,7 @@ namespace nacar::ui
         }
 
         isDragging = true;
-        dragStartValue = params.normalised (pid);
+        dragStartValue = params.normalisedUserValue (pid);
         displayValue = targetValue = dragStartValue;
 
         params.beginGesture (pid);
@@ -363,7 +363,7 @@ namespace nacar::ui
         const float next = getRealValue() + (dir > 0.0f ? step : -step);
 
         params.setFromUI (pid, clampToRange (params, pid, next));
-        targetValue = params.normalised (pid);
+        targetValue = params.normalisedUserValue (pid);
 
         refreshTooltip();
 
@@ -402,7 +402,7 @@ namespace nacar::ui
 
     void ParamControl::timerCallback()
     {
-        targetValue = params.normalised (pid);
+        targetValue = params.normalisedUserValue (pid);
 
         if (isDragging)
             return;
@@ -501,7 +501,7 @@ namespace nacar::ui
                 if (const auto typed = parseTypedValue (safe->pid, valueEntry->getText()))
                 {
                     safe->params.setFromUI (safe->pid, clampToRange (safe->params, safe->pid, *typed));
-                    safe->targetValue = safe->params.normalised (safe->pid);
+                    safe->targetValue = safe->params.normalisedUserValue (safe->pid);
                     safe->refreshTooltip();
 
                     if (safe->onValueChange)

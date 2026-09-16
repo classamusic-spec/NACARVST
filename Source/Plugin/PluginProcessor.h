@@ -22,7 +22,8 @@ namespace nacar
         locks, no file IO, no logging.
     */
     class NacarProcessor : public juce::AudioProcessor,
-                           private juce::ValueTree::Listener
+                           private juce::ValueTree::Listener,
+                           private juce::AsyncUpdater
     {
     public:
         NacarProcessor();
@@ -112,6 +113,16 @@ namespace nacar
         void valueTreeParentChanged (juce::ValueTree&) override;
         void valueTreeRedirected (juce::ValueTree&) override;
 
+        /** Reports the chain's latency to the host.
+
+            Retro and Crush each delay the signal while they are active, and
+            neither does while bypassed, so the figure moves as the user
+            switches modules on and off.  setLatencySamples() notifies the host
+            and its listeners, which is not something to do from the audio
+            thread - so the audio thread only notices the change and this runs
+            on the message thread. */
+        void handleAsyncUpdate() override;
+
         juce::AudioProcessorValueTreeState apvts;
         ParameterRegistry registry;
         StateManager stateManager;
@@ -124,6 +135,7 @@ namespace nacar
         std::atomic<float> meter[2] { { 0.0f }, { 0.0f } };
         std::atomic<double> hostBpm { 120.0 };
         TransportInfo transport;
+        std::atomic<int> reportedLatency { -1 };
 
         // Scope ring.  Interleaved stereo peaks, written by the audio thread.
         std::array<float, (size_t) scopeSize * 2> scope {};

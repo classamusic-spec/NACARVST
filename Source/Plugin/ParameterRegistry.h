@@ -57,11 +57,25 @@ namespace nacar
     //  Owns the static parameter table, builds the APVTS layout, and caches one
     //  raw atomic pointer per parameter so the audio thread never performs a
     //  string lookup or takes a lock.
+    //
+    //  THE MODULATION OVERLAY.  A parameter has two values and both are real:
+    //  the one the user set, and the one actually in force once the modulation
+    //  matrix has had its say.  `raw()` returns the second, because that is
+    //  what an engine means when it asks for a cutoff; `userValue()` returns
+    //  the first, because that is what a knob should draw and what a preset
+    //  should store.
+    //
+    //  The overlay is written once per block by NacarEngine from the resolved
+    //  matrix, and only for the at-most-eight parameters a routing actually
+    //  targets.  Every other entry holds `noModulation`, which costs one
+    //  relaxed load and one compare on the read path.  Nothing else writes it:
+    //  the APVTS is never touched, so a modulated parameter does not drift, is
+    //  not saved modulated, and does not fight the user's own edits.
     // -----------------------------------------------------------------------
     class ParameterRegistry
     {
     public:
-        ParameterRegistry() = default;
+        ParameterRegistry();
 
         /** Builds the layout handed to the AudioProcessorValueTreeState. */
         static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
@@ -79,8 +93,27 @@ namespace nacar
 
         // -- audio-thread accessors, all lock-free --------------------------
 
-        /** Current value in real units (Hz, seconds, dB, 0..1, choice index). */
+        /** The value in force, in real units (Hz, seconds, dB, 0..1, choice
+            index): what the user set, plus whatever the modulation matrix is
+            adding to it this block.  This is what every engine should read. */
         forcedinline float raw (PID p) const noexcept
+        {
+            jassert (values[(size_t) p] != nullptr);
+
+            const float m = modOverride[(size_t) p].load (std::memory_order_relaxed);
+
+            // Ordered, not an equality test: -Wfloat-equal is on for this build
+            // and it is right to be.  Every NACAR range sits far above -1e29,
+            // so the comparison separates the sentinel from real values without
+            // relying on an exact bit pattern surviving the round trip.
+            return m > noModulationFloor ? m
+                                         : values[(size_t) p]->load (std::memory_order_relaxed);
+        }
+
+        /** What the user set, with no modulation applied.  The UI wants this:
+            a knob that jitters because an LFO is running is not showing the
+            user their own setting. */
+        forcedinline float userValue (PID p) const noexcept
         {
             jassert (values[(size_t) p] != nullptr);
             return values[(size_t) p]->load (std::memory_order_relaxed);
@@ -89,8 +122,38 @@ namespace nacar
         forcedinline bool flag (PID p) const noexcept   { return raw (p) > 0.5f; }
         forcedinline int  choice (PID p) const noexcept { return (int) raw (p); }
 
-        /** Value mapped to 0..1 across the parameter's range. */
+        /** Value mapped to 0..1 across the parameter's range.  Follows raw(),
+            so it includes modulation. */
         float normalised (PID) const noexcept;
+
+        /** The user's value mapped to 0..1, with no modulation. */
+        float normalisedUserValue (PID) const noexcept;
+
+        // -- the modulation overlay -----------------------------------------
+        //
+        //  Audio thread, once per block, from NacarEngine.  Nothing else may
+        //  write these: a second writer would make `raw()` non-deterministic
+        //  within a block, which is the one property every engine relies on.
+
+        /** The sentinel that means "this parameter is not modulated", and the
+            floor that recognises it.  A real parameter can never reach either:
+            the widest range in the instrument is a few thousand. */
+        static constexpr float noModulation      = -1.0e30f;
+        static constexpr float noModulationFloor = -1.0e29f;
+
+        /** Offsets a parameter by a normalised amount, clamped into its own
+            range, and publishes the result for this block.  `normalisedOffset`
+            of zero still installs an override, so a routing at zero depth
+            behaves identically to one at any other depth. */
+        void setModulation (PID, float normalisedOffset) const noexcept;
+
+        /** Removes one override, so raw() falls back to the user's value. */
+        void clearModulation (PID) const noexcept;
+
+        /** Removes every override.  Call on reset and whenever the matrix
+            stops targeting a parameter it used to target - a stale override
+            is a parameter frozen at a modulated value. */
+        void clearAllModulation() const noexcept;
 
         // -- message-thread accessors ---------------------------------------
 
@@ -115,6 +178,11 @@ namespace nacar
         juce::AudioProcessorValueTreeState* apvts = nullptr;
         std::array<std::atomic<float>*, numParameters> values {};
         std::array<juce::RangedAudioParameter*, numParameters> params {};
+
+        /** Mutable because it is a per-block audio-thread cache, not user
+            state: an engine holding a `const ParameterRegistry&` is promising
+            not to change what the user set, and this does not. */
+        mutable std::array<std::atomic<float>, numParameters> modOverride;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParameterRegistry)
     };

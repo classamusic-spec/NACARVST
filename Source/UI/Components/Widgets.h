@@ -277,6 +277,25 @@ namespace nacar::ui
         enum class Tint { mint, violet };
         enum class Seat { glass, ceramic };
 
+        /** The halo a lit glass lamp throws, as one pair of numbers.
+
+            A JUCE component cannot paint outside its own bounds, and the FX
+            cards give this button a 22 x 22 box around a disc of radius 10 -
+            so ~8 px of halo has nowhere to go and used to be cut off SQUARE by
+            the component edge, landing on the card as a mint tile. No halo
+            fits in that box; the geometry is the bug, not the numbers.
+
+            So it is drawn in two halves. This button draws the part inside its
+            own bounds, clipped to a circle so it can never tile whatever its
+            parent does. A parent that wants the rest draws it OUTSIDE the
+            button's bounds with these same numbers and
+            `excludeClipRegion (power.getBounds())`, so the two halves meet at
+            the seam instead of adding up across it. FXModuleCard does exactly
+            that. These constants are public so that it does not have to keep
+            its own copy of them in step with this file. */
+        static constexpr float haloAlpha  = 0.34f;
+        static constexpr float haloSpread = 8.0f;
+
         explicit PowerButton (Tint = Tint::mint);
 
         void setTint (Tint t) { tint = t; repaint(); }

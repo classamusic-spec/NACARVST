@@ -621,23 +621,31 @@ namespace nacar::theme
         const auto body = juce::Rectangle<float> (radius * 2.0f, radius * 2.0f).withCentre (centre);
 
         const auto base   = darkCap ? juce::Colour (0xff202026) : ceramicLight;
-        const auto shadow = darkCap ? juce::Colour (0xff0e0e12) : ceramicDark.darker (0.10f);
+        const auto shadow = darkCap ? juce::Colour (0xff141418) : ceramicDark;
 
-        // 1. The body, lit from a POINT rather than by a linear ramp.  The
-        //    bright spot sits inside the disc at about a third of the radius
-        //    towards the light; everything falls away from there.  That is the
-        //    whole difference between a disc and a dome.
+        // 1. The body, lit from a POINT rather than by a linear ramp - but a
+        //    SHALLOW one.
+        //
+        //    This was a full hemisphere: bright spot at 0.42 r, a mid stop at
+        //    0.55, and a far edge a shade below ceramicDark.  Rendered, every
+        //    knob in the instrument came out as a glossy pearl, which is not
+        //    what a machined cap looks like and not what the reference shows.
+        //    A turned aluminium face is nearly FLAT; its depth is in the rim
+        //    and the seat, not in the face.
+        //
+        //    So the face now stays within about one shade of itself across
+        //    three quarters of its width, and only the last quarter turns
+        //    towards the edge.
         {
-            const juce::Point<float> hot { centre.x + lightX * radius * 0.42f,
-                                           centre.y + lightY * radius * 0.42f };
+            const juce::Point<float> hot { centre.x + lightX * radius * 0.30f,
+                                           centre.y + lightY * radius * 0.30f };
 
-            juce::ColourGradient dome (base.brighter (0.22f + hover * 0.06f), hot.x, hot.y,
+            juce::ColourGradient dome (base.brighter (0.07f + hover * 0.04f), hot.x, hot.y,
                                        shadow, centre.x - lightX * radius * 1.05f,
                                                centre.y - lightY * radius * 1.05f, true);
 
-            // A mid stop, so the falloff is not linear: real curvature turns
-            // away from the light fastest near the terminator.
-            dome.addColour (0.55, base.darker (darkCap ? 0.10f : 0.03f));
+            dome.addColour (0.62, base);
+            dome.addColour (0.88, darkCap ? base.darker (0.35f) : ceramicMid);
 
             g.setGradientFill (dome);
             g.fillEllipse (body);
@@ -653,8 +661,7 @@ namespace nacar::theme
                 const float t  = (float) i / (float) (rings + 1);
                 const float rr = radius * (1.0f - t * 0.86f);
 
-                g.setColour ((darkCap ? juce::Colours::white : juce::Colours::white)
-                                 .withAlpha (0.05f * (1.0f - t * 0.7f)));
+                g.setColour (juce::Colours::white.withAlpha (0.018f * (1.0f - t * 0.7f)));
                 g.drawEllipse (juce::Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (centre),
                                0.8f);
             }
@@ -693,13 +700,14 @@ namespace nacar::theme
 
         // 4. A tight specular, the size of the light itself.  Small and bright
         //    beats large and soft: it is what makes the surface read as
-        //    polished rather than matte.
+        //    polished rather than matte - and a LARGE soft one is what made
+        //    these read as pearls, so it is a third of the size it was.
         {
-            const float sr = radius * 0.30f;
-            const juce::Point<float> at { centre.x + lightX * radius * 0.52f,
-                                          centre.y + lightY * radius * 0.52f };
+            const float sr = radius * 0.17f;
+            const juce::Point<float> at { centre.x + lightX * radius * 0.46f,
+                                          centre.y + lightY * radius * 0.46f };
 
-            juce::ColourGradient spec (juce::Colours::white.withAlpha (darkCap ? 0.16f : 0.42f),
+            juce::ColourGradient spec (juce::Colours::white.withAlpha (darkCap ? 0.14f : 0.22f),
                                        at.x, at.y,
                                        juce::Colours::transparentWhite,
                                        at.x + sr, at.y + sr, true);

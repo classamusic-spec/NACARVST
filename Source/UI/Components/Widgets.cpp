@@ -728,8 +728,12 @@ namespace nacar::ui
         {
             // Light: the channel carries the depth, so the seat around it only
             // has to say which side of the well the light cannot reach.
-            const auto wall = dark ? juce::Colours::black.withAlpha (0.70f)
-                                   : theme::ceramicDeep.withAlpha (0.60f);
+            // Light: the channel carries the depth, so the seat only says which
+            // side of the well the light cannot reach.  These were 0.70 / 0.60
+            // and rendered as a thick dark tyre around every cap - the seat was
+            // competing with the cap instead of receiving it.
+            const auto wall = dark ? juce::Colours::black.withAlpha (0.42f)
+                                   : theme::ceramicDeep.withAlpha (0.26f);
 
             auto grad = acrossLight (seatRect, wall, wall.withAlpha (wall.getFloatAlpha() * 0.12f), 0.95f);
             grad.addColour (0.62, wall.withAlpha (wall.getFloatAlpha() * 0.35f));
@@ -743,8 +747,8 @@ namespace nacar::ui
         // the cap's own rim and is what makes the two read as opposite curves.
         {
             g.setGradientFill (acrossLight (seatRect,
-                                            juce::Colours::black.withAlpha (dark ? 0.55f : 0.22f),
-                                            juce::Colours::white.withAlpha (dark ? 0.16f : 0.55f),
+                                            juce::Colours::black.withAlpha (dark ? 0.40f : 0.14f),
+                                            juce::Colours::white.withAlpha (dark ? 0.14f : 0.38f),
                                             0.95f));
             fillRing (g, centre, seatOuter - 0.5f, 1.0f);
         }
@@ -756,10 +760,16 @@ namespace nacar::ui
             const float outerLip = grooveR + knobGrooveWidth * 0.5f;
             const float innerLip = grooveR - knobGrooveWidth * 0.5f;
 
+            // The channel floor.  This was ceramicDeep.darker(0.45) and it made
+            // the whole seat read as a thick dark tyre: the arc only occupies
+            // part of the circumference, so the bare floor is most of what you
+            // see, and it was nearly black against a near-white panel.  A
+            // machined channel in light ceramic is only a shade or two below
+            // the face around it.
             const auto floorNear = dark ? juce::Colours::black
-                                        : theme::ceramicDeep.darker (0.45f);
+                                        : theme::ceramicDark.darker (0.10f);
             const auto floorFar  = dark ? theme::glassDeep
-                                        : theme::ceramicDeep.brighter (0.06f);
+                                        : theme::ceramicMid;
 
             g.setGradientFill (acrossLight (seatRect, floorNear, floorFar, 0.9f));
             strokeArc (g, centre, grooveR, -span, span, knobGrooveWidth);
@@ -1266,8 +1276,21 @@ namespace nacar::ui
                               (0.20f + hover * 0.10f) * on * (1.0f - press * 0.25f), 5.0f);
 
         if (on > 0.01f && seat == Seat::glass)
+        {
+            // Clipped to a circle, so this half of the halo can never square
+            // off against the component edge however tight the box is - which
+            // is what it used to do, landing on the FX cards as a mint tile.
+            // The parent draws the rest; see the note on haloAlpha in Widgets.h.
+            juce::Graphics::ScopedSaveState ss (g);
+
+            juce::Path round;
+            round.addEllipse (getLocalBounds().toFloat());
+            g.reduceClipRegion (round);
+
             theme::outerGlow (g, disc, r, accent,
-                              (0.34f + hover * 0.18f) * on * (1.0f - press * 0.25f), 8.0f);
+                              (haloAlpha + hover * 0.18f) * on * (1.0f - press * 0.25f),
+                              haloSpread);
+        }
 
         if (seat == Seat::ceramic)
         {

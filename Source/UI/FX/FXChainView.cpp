@@ -13,6 +13,46 @@ namespace nacar::ui
     static constexpr float kLinkSize      = 12.0f;   // spec: a small chain link on the seam
     static constexpr float kInsertWidth   =  2.0f;   // the violet drop indicator
     static constexpr float kAddSlotIcon   =  0.22f;  // plus, tuned for the 55 x 100 dashed slot
+    static constexpr float kLinkRelief    =  0.9f;   // the link's own shadow, along the light
+    static constexpr float kHaloSpread    = 10.0f;   // the active card's halo, < the 20 px gap
+
+    // How far past a card's own bounds the things we paint for it reach: the
+    // floating shadow's blur and offset, and the active card's halo.  Used as
+    // the repaint margin, because a repaint that is one pixel short of the
+    // shadow is exactly what makes a dragged card smear.
+    static constexpr int   kShadowReach   = 22;
+
+    // -----------------------------------------------------------------------
+    //  What the cards throw onto the rack.
+    //
+    //  A juce::Component cannot paint outside its own bounds, so a card cannot
+    //  draw the shadow it casts or the halo it throws: both of those live on
+    //  the rack, behind it, and the rack is this component.  The card reports
+    //  how far off the rack it is sitting (FXModuleCard::getElevation) and the
+    //  numbers below turn that into a shadow.
+    //
+    //  They mirror theme.cpp's own depth table for `raised` and `floating`,
+    //  including the 1.4x that theme::raisedGlass applies to every glass-on-
+    //  glass shadow - glass sits genuinely above the panel behind it in a way
+    //  ceramic on ceramic does not - so a card shadowed from here is lit
+    //  identically to one the vocabulary draws itself.
+    // -----------------------------------------------------------------------
+    struct CardShadow
+    {
+        float offset, blur, alpha;
+    };
+
+    static CardShadow shadowFor (theme::Elevation e) noexcept
+    {
+        switch (e)
+        {
+            case theme::Elevation::floating: return { 6.0f, 20.0f, 0.34f * 1.4f };
+            case theme::Elevation::raised:   return { 3.0f, 10.0f, 0.26f * 1.4f };
+            case theme::Elevation::resting:  return { 1.5f,  5.0f, 0.20f * 1.4f };
+            case theme::Elevation::flush:
+            default:                         return { 0.0f,  0.0f, 0.0f };
+        }
+    }
 
     // -----------------------------------------------------------------------
     //  Two properties this view persists that StateManager.h (frozen) has no
@@ -327,6 +367,9 @@ namespace nacar::ui
         card->onLockRequested   = [this, name] (bool l) { setModuleLocked (name, l); };
         card->onBypassRequested = [this, name] (bool b) { setModuleBypassed (name, b); };
 
+        // We paint this card's shadow and its halo, so its hover has to reach us.
+        card->onHoverChanged = [this, raw] { repaint (raw->getBounds().expanded (kShadowReach)); };
+
         card->onDragStart = [this, raw] (const juce::MouseEvent& e) { beginCardDrag (*raw, e); };
         card->onDragMove  = [this]      (const juce::MouseEvent& e) { dragCard (e); };
         card->onDragEnd   = [this]      (const juce::MouseEvent&)   { endCardDrag(); };
@@ -424,6 +467,9 @@ namespace nacar::ui
 
         card.setDragging (true);
         card.toFront (false);
+
+        // The hole it leaves and the deeper shadow it now casts are ours.
+        repaint (cardRowArea());
     }
 
     void FXChainView::dragCard (const juce::MouseEvent& e)
@@ -437,14 +483,22 @@ namespace nacar::ui
         const int   x  = juce::jlimit (0, juce::jmax (0, getWidth() - (int) fx::cardW),
                                        juce::roundToInt ((float) dragStartBounds.getX() + dx));
 
+        const auto before = card.getBounds();
         card.setBounds (dragStartBounds.withX (x));
+
+        // Every move, not only when the landing index changes: the lifted
+        // card's shadow is painted by us, outside the card's own bounds, so the
+        // region JUCE repaints for the move itself stops short of it and the
+        // shadow smears across the rack.  Scoped to where the card actually
+        // was and is, because this runs at pointer rate.
+        repaint (before.getUnion (card.getBounds()).expanded (kShadowReach));
 
         const int landing = dropIndexFor ((float) x + fx::cardW * 0.5f);
 
         if (landing != dropIndex)
         {
             dropIndex = landing;
-            repaint();
+            repaint (cardRowArea());
         }
     }
 
@@ -601,7 +655,16 @@ namespace nacar::ui
     {
         const auto b = getLocalBounds().toFloat();
 
-        theme::glassSurface (g, b, radiusPanel);
+        // -- the rack -------------------------------------------------------
+        // Not a surface with things drawn on it: a well cut into the chassis,
+        // with the cards seated inside it.  Almost all of the depth in this
+        // region is that one contrast - the well's inner shadow under its top
+        // edge against the cards' own lit top edges a few pixels below.
+        // No glassEdge hairline round it any more: that rim is what lights the
+        // edge of something raised, and this is the opposite of raised.  The
+        // well's own dark top edge and lit bottom edge draw the boundary, and
+        // the ceramic chassis outside it supplies all the contrast needed.
+        theme::recessedWell (g, b, radiusPanel, theme::glassDeep, 1.0f);
 
         glassLabel (g, "FX CHAIN", { fx::titleX, fx::titleBase },
                     fx::titleSize, fx::titleTrack, theme::glassInkMuted);
@@ -626,6 +689,15 @@ namespace nacar::ui
                             juce::Justification::centred);
             }
         }
+        else
+        {
+            // The empty slot is a hole in the rack, not a card that has been
+            // switched off: the dashed pill sits over a well, so you can see
+            // the floor of the rack through it.
+            theme::recessedWell (g, fx::addSlot, radiusCard, theme::glassDeep, 0.85f);
+
+            paintCardSeats (g);
+        }
 
         // -- the chain link on every seam ----------------------------------
         {
@@ -634,21 +706,84 @@ namespace nacar::ui
             for (int i = 0; i + 1 < n; ++i)
             {
                 const float seam = fx::cardX0 + (float) i * fx::cardPitch + fx::cardW + gap * 0.5f;
+                const auto  area = centredSquare ({ seam, fx::linkY }, kLinkSize * 0.5f);
 
+                // Lying on the floor of the rack, so it has a shadow under it -
+                // faint, but enough that the seam is a place rather than a gap.
                 icons::draw (g, icons::Icon::link,
-                             centredSquare ({ seam, fx::linkY }, kLinkSize * 0.5f),
-                             theme::glassInkFaint, 1.3f);
+                             area.translated (-theme::lightX * kLinkRelief,
+                                              -theme::lightY * kLinkRelief),
+                             theme::glassDeep.darker (0.8f).withAlpha (0.85f), 1.3f);
+
+                icons::draw (g, icons::Icon::link, area, theme::glassInkFaint, 1.3f);
             }
         }
 
         // -- drop indicator -------------------------------------------------
         if (dragIndex >= 0 && dropIndex >= 0 && dropIndex != dragIndex)
         {
-            const float x = insertionLineX();
+            const auto bar = juce::Rectangle<float> (insertionLineX() - kInsertWidth * 0.5f,
+                                                     fx::cardY - 4.0f,
+                                                     kInsertWidth, fx::cardH + 8.0f);
 
-            g.setColour (theme::violet);
-            g.fillRoundedRectangle (x - kInsertWidth * 0.5f, fx::cardY - 4.0f,
-                                    kInsertWidth, fx::cardH + 8.0f, kInsertWidth * 0.5f);
+            theme::outerGlow (g, bar, kInsertWidth * 0.5f, theme::violet, 0.55f, 6.0f);
+
+            g.setColour (theme::violetLight);
+            g.fillRoundedRectangle (bar, kInsertWidth * 0.5f);
+        }
+    }
+
+    /** The strip the card row and everything it throws occupies. */
+    juce::Rectangle<int> FXChainView::cardRowArea() const
+    {
+        return { 0, (int) fx::cardY - kShadowReach,
+                 getWidth(), (int) fx::cardH + kShadowReach * 2 };
+    }
+
+    // -----------------------------------------------------------------------
+    //  Everything the cards throw onto the rack: the hole a lifted card leaves
+    //  behind it, the contact shadow each one casts, and the halo the active
+    //  one throws.  None of it can be painted by the cards themselves, because
+    //  all of it falls outside their bounds.
+    // -----------------------------------------------------------------------
+    void FXChainView::paintCardSeats (juce::Graphics& g)
+    {
+        const int n = (int) cards.size();
+
+        // 1. The slot a dragged card came out of.  There is genuinely nothing
+        //    there while the drag is in flight, so it reads as bare rack floor.
+        if (juce::isPositiveAndBelow (dragIndex, n))
+            theme::recessedWell (g, dragStartBounds.toFloat(), radiusCard,
+                                 theme::glassDeep, 1.4f);
+
+        // 2. The seated cards, lowest first: a card that is being dragged is
+        //    above the rest and its shadow has to fall across theirs.
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                const auto* card = cards[(size_t) i].get();
+
+                if (card == nullptr || ! card->isVisible())
+                    continue;
+
+                if ((i == dragIndex) != (pass == 1))
+                    continue;
+
+                const auto r = card->getBounds().toFloat();
+                const auto d = shadowFor (card->getElevation());
+
+                if (d.alpha > 0.0f)
+                    theme::contactShadow (g, r, radiusCard, d.offset, d.blur, d.alpha);
+
+                // The active module is lit from within - FXModuleCard draws the
+                // inner glow - and this is the light that gets out: a halo on
+                // the rack around it, kept inside the 20 px gap so it never
+                // reaches the module either side.
+                if (card->getSelected())
+                    theme::outerGlow (g, r, radiusCard, theme::violet,
+                                      card->getCardHovered() ? 0.30f : 0.22f, kHaloSpread);
+            }
         }
     }
 

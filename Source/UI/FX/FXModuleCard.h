@@ -57,11 +57,26 @@ namespace nacar::ui
         /** Raises the card visually while the chain is reordering it. */
         void setDragging (bool);
 
+        /** True while the pointer is over the card's body.
+
+            FXChainView needs this because the things a raised card throws onto
+            the rack - its contact shadow, its halo - are painted by the rack,
+            and they have to grow when the card lifts towards the pointer. */
+        bool getCardHovered() const noexcept      { return cardHovered; }
+
+        /** How far off the rack this card is sitting right now.
+
+            Asked by FXChainView so that the shadow it draws behind the card and
+            the light the card draws on itself cannot disagree. */
+        theme::Elevation getElevation() const noexcept;
+
         // -- callbacks, all owned by FXChainView -----------------------------
         std::function<void()>     onSelect;          ///< the card was clicked
         std::function<void()>     onRemove;          ///< the `x` was clicked
         std::function<void (bool)> onBypassRequested; ///< the `-` was clicked
         std::function<void (bool)> onLockRequested;   ///< from the right-click menu
+
+        std::function<void()>     onHoverChanged;    ///< the rack must redraw what we throw
 
         std::function<void (const juce::MouseEvent&)> onDragStart;
         std::function<void (const juce::MouseEvent&)> onDragMove;
@@ -75,6 +90,7 @@ namespace nacar::ui
         void mouseDrag (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
         void mouseMove (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override;
 
     private:
@@ -87,6 +103,7 @@ namespace nacar::ui
 
         void showContextMenu();
         void powerStateChanged();
+        void setCardHovered (bool);
 
         NacarProcessor& processor;
         Slot slot;
@@ -101,6 +118,7 @@ namespace nacar::ui
         bool powered  = false;
 
         Hit  hovered      = Hit::none;
+        bool cardHovered  = false;
         Hit  pressedOn    = Hit::none;
         bool dragStarted  = false;
 

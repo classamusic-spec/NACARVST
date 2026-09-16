@@ -26,6 +26,14 @@ namespace nacar::ui
     static constexpr float kPowerInset     = 21.0f;   // centre, in from bottom-right
     static constexpr float kDragThreshold  =  4.0f;   // px before a click becomes a drag
 
+    // How far the module glyph stands off the card face.  It is a distance in
+    // pixels along theme::lightX / lightY, never a direction of its own: the
+    // glyph's shadow falls exactly where every other shadow in the instrument
+    // falls, which is the only reason a stroke drawn twice reads as relief
+    // rather than as a printing error.
+    static constexpr float kGlyphRelief    =  1.5f;
+
+
     // -----------------------------------------------------------------------
     FXModuleCard::FXModuleCard (NacarProcessor& p, Slot s)
         : processor (p), slot (s)
@@ -95,6 +103,29 @@ namespace nacar::ui
         repaint();
     }
 
+    theme::Elevation FXModuleCard::getElevation() const noexcept
+    {
+        // A card at rest is a module seated in the rack; hovered it comes up
+        // towards the pointer; dragged it is off the rack altogether.
+        if (dragging)
+            return theme::Elevation::floating;
+
+        return cardHovered ? theme::Elevation::floating : theme::Elevation::raised;
+    }
+
+    void FXModuleCard::setCardHovered (bool shouldBeHovered)
+    {
+        if (cardHovered == shouldBeHovered)
+            return;
+
+        cardHovered = shouldBeHovered;
+        repaint();
+
+        // The rack draws our shadow and our halo, so it has to redraw too.
+        if (onHoverChanged != nullptr)
+            onHoverChanged();
+    }
+
     void FXModuleCard::powerStateChanged()
     {
         const bool now = power.getToggleState();
@@ -153,17 +184,41 @@ namespace nacar::ui
     {
         const auto b = getLocalBounds().toFloat();
 
-        // -- body ----------------------------------------------------------
-        // A card is a cut-out in the panel's glass, so it carries the same
-        // vocabulary the panel does - flat fill, inner top shadow, glassEdge
-        // hairline - with a raised fill and the card radius.  Glass never gets
-        // a drop shadow, so a dragged card is lifted by brightening its fill
-        // and rimming it instead.
-        theme::glassSurface (g, b, radiusCard, dragging ? theme::glassEdge : theme::glassRaised);
+        // Hover lifts the card towards the pointer rather than tinting it: the
+        // fill brightens a little, the top edge catches more light, and - the
+        // part that actually sells it - the shadow FXChainView draws behind us
+        // spreads, because we told it we are further off the rack.
+        const float hover = (cardHovered && ! dragging) ? 1.0f : 0.0f;
 
-        if (selected || dragging)
+        // -- body ----------------------------------------------------------
+        // A module seated in the rack: a lit top edge, a shaded bottom edge and
+        // a face barely lighter than the well behind it, because a dark object
+        // on a dark ground can only be read by its edges.
+        //
+        // The elevation passed here is deliberately `flush`.  raisedGlass()
+        // derives exactly one thing from elevation - the contact shadow - and
+        // that shadow falls OUTSIDE these bounds, where a child component
+        // cannot paint, so drawing it here would only paint layers that the
+        // body fill immediately covers.  FXChainView draws it for us, behind
+        // the card, at getElevation(); the two cannot drift apart because both
+        // read that one function.
+        theme::raisedGlass (g, b, radiusCard, theme::Elevation::flush, 0.0f, hover,
+                            dragging ? theme::glassEdge : theme::glassRaised);
+
+        // -- the active module is lit from within ---------------------------
+        if (selected)
         {
-            g.setColour (selected ? theme::violet : theme::violetDeep);
+            // Small numbers on purpose.  Wound up, innerGlow stops being light
+            // coming through the card's edge and becomes a violet tube drawn
+            // round it, which is the outlined look this is meant to replace.
+            theme::innerGlow (g, b, radiusCard, theme::violet, 0.26f + hover * 0.08f, 5.0f);
+
+            g.setColour (theme::violet);
+            g.drawRoundedRectangle (b.reduced (0.5f), radiusCard, 1.0f);
+        }
+        else if (dragging)
+        {
+            g.setColour (theme::violetDeep);
             g.drawRoundedRectangle (b.reduced (0.5f), radiusCard, 1.0f);
         }
 
@@ -176,6 +231,8 @@ namespace nacar::ui
             const auto colour = bypassed ? theme::violet
                                          : (hovered == Hit::bypass ? theme::glassInk
                                                                    : theme::glassInkMuted);
+            // No relief on this one or the x: at nine pixels the shadow lands
+            // inside the stroke and reads as a blur, not as a raised glyph.
             icons::draw (g, icons::Icon::minus, bypassGlyphArea(), colour, 1.5f);
         }
 
@@ -221,7 +278,35 @@ namespace nacar::ui
             auto colour = selected ? theme::violet : theme::glassInk;
             colour = colour.withMultipliedAlpha ((powered ? 1.0f : 0.45f) * content);
 
+            // The glyph stands off the card face: its own shadow falls away
+            // from the light, so it sits ON the card rather than in it.
+            icons::draw (g, slot.glyph,
+                         area.translated (-theme::lightX * kGlyphRelief,
+                                          -theme::lightY * kGlyphRelief),
+                         theme::glassDeep.darker (0.8f).withAlpha (0.8f * content), 1.6f);
+
             icons::draw (g, slot.glyph, area, colour, 1.6f);
+        }
+
+        // -- the light the power ring throws onto the card ------------------
+        // The ring paints itself: PowerButton's glass seat is a recessed lens
+        // with its own mint halo when lit and dead dark glass when not, and
+        // nothing here draws a second lamp.  But that halo is eight pixels of
+        // spread inside a twenty-two pixel component, so it is cut off square
+        // by the ring's own bounds and reads as a mint tile on the card.  The
+        // part that lands on the CARD is the card's to draw, and it is drawn
+        // with the ring's box excluded and to the ring's own numbers, so the
+        // two halves meet at the seam instead of adding up across it.
+        const auto ring = power.getBounds();
+
+        if (powered && ! ring.isEmpty())
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.excludeClipRegion (ring);
+
+            const auto r = ring.toFloat();
+            theme::outerGlow (g, r, r.getWidth() * 0.5f, theme::mint,
+                              PowerButton::haloAlpha, PowerButton::haloSpread);
         }
     }
 
@@ -307,8 +392,15 @@ namespace nacar::ui
         }
     }
 
+    void FXModuleCard::mouseEnter (const juce::MouseEvent&)
+    {
+        setCardHovered (true);
+    }
+
     void FXModuleCard::mouseMove (const juce::MouseEvent& e)
     {
+        setCardHovered (true);
+
         const auto h = hitAt (e.position);
         const auto shown = (h == Hit::body ? Hit::none : h);
 
@@ -321,6 +413,12 @@ namespace nacar::ui
 
     void FXModuleCard::mouseExit (const juce::MouseEvent&)
     {
+        // Moving onto the power ring is an exit as far as we are concerned -
+        // the ring is a child component - but the card has not stopped being
+        // under the pointer, and letting it drop would make it flinch away
+        // just as the user reaches for it.
+        setCardHovered (isMouseOver (true));
+
         if (hovered == Hit::none)
             return;
 

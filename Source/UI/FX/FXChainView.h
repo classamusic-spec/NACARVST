@@ -56,6 +56,14 @@ namespace nacar::ui
         void setCollapsed (bool);
 
         // -- cards ----------------------------------------------------------
+        /** The shadows and halos the cards cast onto the rack.  They belong to
+            the cards but cannot be painted by them: a component cannot paint
+            outside its own bounds, and all of this falls outside theirs. */
+        void paintCardSeats (juce::Graphics&);
+
+        /** The strip the card row occupies, plus the reach of what it throws. */
+        juce::Rectangle<int> cardRowArea() const;
+
         std::unique_ptr<FXModuleCard> makeCard (const FXModuleCard::Slot&);
         void rebuildCards();
         void syncCardStates();

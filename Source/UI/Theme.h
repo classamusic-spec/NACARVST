@@ -97,9 +97,111 @@ namespace nacar::theme
     void glow (juce::Graphics&, juce::Point<float> centre, float radius,
                juce::Colour, float alpha = 0.55f);
 
-    /** Machined concentric sheen used on knob caps. */
+    /** Machined concentric sheen used on knob caps.
+
+        SUPERSEDED by domeCap() below, which lights the cap as a solid object
+        rather than as a disc with a gradient on it.  Kept because removing it
+        would change every call site in one commit; new code calls domeCap. */
     void machinedCap (juce::Graphics&, juce::Point<float> centre, float radius,
                       bool darkCap = false);
+
+    // -----------------------------------------------------------------------
+    //  DIMENSIONAL VOCABULARY
+    //
+    //  The routines above draw surfaces.  These draw OBJECTS: things with a
+    //  thickness, sitting on the chassis, lit from one direction, casting a
+    //  shadow onto what is behind them.  That difference is the whole of what
+    //  separates the reference image from a flat redraw of it.
+    //
+    //  ONE LIGHT, AND IT NEVER MOVES.  Upper-left, about sixty degrees of
+    //  elevation.  Every specular, every bevel, every contact shadow in the
+    //  instrument derives from `lightX`/`lightY` below, so an element cannot be lit
+    //  from a direction of its own and break the illusion for everything
+    //  around it.  This is the single most important rule in this file: a
+    //  panel of controls reads as machined metal only while they all agree
+    //  about where the light is.
+    // -----------------------------------------------------------------------
+
+    /** The light direction, as a unit vector in screen space (y grows down).
+        Upper-left: negative x, negative y. */
+    inline constexpr float lightX = -0.55f;
+    inline constexpr float lightY = -0.83f;
+
+    /**
+        How far off the chassis an element sits.  Elevation drives the shadow,
+        the strength of the specular and the depth of the bevel together,
+        because in life those three are one fact seen three ways - and a
+        control whose shadow says "floating" while its bevel says "flush" is
+        exactly what makes an interface look drawn rather than built.
+    */
+    enum class Elevation
+    {
+        flush,      ///< engraved into the chassis: no shadow, bevel only
+        resting,    ///< a pill, a small button - just off the surface
+        raised,     ///< a primary action, a knob cap
+        floating    ///< a card or a drawer over everything else
+    };
+
+    /**
+        A raised ceramic object.  Contact shadow, domed body, specular top edge,
+        bevelled bottom edge, and the inset highlight just under the top edge
+        that reads as the material's own thickness.
+
+        `press` and `hover` are 0..1 and are meant to be animated.  Pressing
+        does not merely darken: the object sinks, its shadow tightens and its
+        specular moves to the bottom edge, which is what a real key does.
+    */
+    void raisedCeramic (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                        Elevation = Elevation::resting,
+                        float press = 0.0f, float hover = 0.0f,
+                        juce::Colour top = ceramicLight,
+                        juce::Colour bottom = ceramicMid);
+
+    /** The same object in optical glass: a dark control on a dark ground, which
+        needs its edges lit rather than its face, or it disappears. */
+    void raisedGlass (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                      Elevation = Elevation::resting,
+                      float press = 0.0f, float hover = 0.0f,
+                      juce::Colour fill = glassRaised);
+
+    /** An accent-filled primary action.  The fill is lit from within as well as
+        from above, which is what separates "selected" from "painted violet". */
+    void accentSurface (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                        juce::Colour accent, float press = 0.0f, float hover = 0.0f);
+
+    /** A well cut into the surface: inner shadow under the top edge, a catch of
+        light along the bottom.  The exact inverse of raisedCeramic, and what a
+        groove, a track or a pressed state should look like. */
+    void recessedWell (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                       juce::Colour fill, float depth = 1.0f);
+
+    /** A soft glow just inside an edge.  What makes an active card read as lit
+        from within rather than outlined. */
+    void innerGlow (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                    juce::Colour, float alpha, float spread);
+
+    /** A glow outside an edge - the halo an active element throws onto the
+        surface behind it. */
+    void outerGlow (juce::Graphics&, juce::Rectangle<float> bounds, float corner,
+                    juce::Colour, float alpha, float spread);
+
+    /**
+        A knob cap as a solid object.
+
+        The difference from machinedCap is that the light source is a POINT off
+        the upper-left rather than a linear gradient: the bright spot sits
+        inside the disc, the far edge falls into shadow, and the rim catches
+        light on one side and loses it on the other.  That is what a turned
+        aluminium cap does, and it is why a knob drawn this way looks like it
+        could be gripped.
+    */
+    void domeCap (juce::Graphics&, juce::Point<float> centre, float radius,
+                  bool darkCap = false, float hover = 0.0f);
+
+    /** The machined recess a knob cap sits in: a dark seat ring with its own
+        inner shadow, so the cap has somewhere to be raised FROM. */
+    void capSeat (juce::Graphics&, juce::Point<float> centre, float capRadius,
+                  float seatWidth = 3.0f);
 
     // -----------------------------------------------------------------------
     //  LookAndFeel

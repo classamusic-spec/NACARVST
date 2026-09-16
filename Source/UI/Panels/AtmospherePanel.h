@@ -30,7 +30,8 @@ namespace nacar::ui
         Eighteen knobs across the panel is cheap, and it keeps the binding
         immutable, which is what the widget contract wants.
     */
-    class AtmospherePanel : public juce::Component
+    class AtmospherePanel : public juce::Component,
+                            private juce::ValueTree::Listener
     {
     public:
         AtmospherePanel (NacarProcessor&, EditorHost&);
@@ -88,10 +89,17 @@ namespace nacar::ui
         juce::Rectangle<float> knobBoundsFor (const Module&) const;
         void paintModule (juce::Graphics&, const Module&) const;
 
+        // -- juce::ValueTree::Listener ---------------------------------------
+        void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+        void valueTreeParentChanged (juce::ValueTree&) override;
+        void reacquireTree();
+
         NacarProcessor& processor;
         juce::ValueTree editorTree;
 
         std::array<Module, (size_t) numModules> modules;
+
+        bool writingOurselves = false;   ///< suppresses the listener for our own edits
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AtmospherePanel)
     };

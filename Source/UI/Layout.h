@@ -10,7 +10,23 @@
     editor applies a single uniform transform; no component computes its own
     scale factor and no component hard-codes a coordinate locally.
 
+    Two conventions hold throughout, without exception:
+
+      * Every coordinate in a region sub-namespace is **region-local**. A panel
+        positions its contents against its own origin and never needs to know
+        where it sits on the canvas.
+
+      * Every `*Base` / `*Baseline` constant is a **true text baseline**, not the
+        top of the em box. `ui::ceramicLabel` and `ui::glassLabel` take a
+        baseline and subtract the ascent themselves, so these values pass
+        straight through with no conversion at the call site.
+
     Rule: if a number describes *where something is*, it belongs in this file.
+
+    Note on `const` rather than `constexpr` for the rectangles: juce::Rectangle
+    has no constexpr constructor in JUCE 8, so RectF constants cannot be
+    constant expressions. juce::Point does, which is why the Pt constants and
+    the aggregates built from them stay constexpr.
 */
 namespace nacar::layout
 {
@@ -36,14 +52,14 @@ namespace nacar::layout
     // -----------------------------------------------------------------------
     //  Regions (UI spec section 2)
     // -----------------------------------------------------------------------
-    inline constexpr RectF header     { 8.0f,    10.0f, 1520.0f,  86.0f };
-    inline constexpr RectF leftPanel  { 8.0f,   102.0f,  317.0f, 818.0f };
-    inline constexpr RectF viewport   { 333.0f, 102.0f,  875.0f, 337.0f };
-    inline constexpr RectF mutatePanel{ 333.0f, 447.0f,  875.0f, 267.0f };
-    inline constexpr RectF fxChain    { 333.0f, 722.0f,  875.0f, 198.0f };
-    inline constexpr RectF rightPanel { 1216.0f,102.0f,  312.0f, 818.0f };
-    inline constexpr RectF bottomBar  { 8.0f,   928.0f, 1520.0f,  66.0f };
-    inline constexpr RectF footer     { 8.0f,   994.0f, 1520.0f,  22.0f };
+    inline const     RectF header     { 8.0f,    10.0f, 1520.0f,  86.0f };
+    inline const     RectF leftPanel  { 8.0f,   102.0f,  317.0f, 818.0f };
+    inline const     RectF viewport   { 333.0f, 102.0f,  875.0f, 337.0f };
+    inline const     RectF mutatePanel{ 333.0f, 447.0f,  875.0f, 267.0f };
+    inline const     RectF fxChain    { 333.0f, 722.0f,  875.0f, 198.0f };
+    inline const     RectF rightPanel { 1216.0f,102.0f,  312.0f, 818.0f };
+    inline const     RectF bottomBar  { 8.0f,   928.0f, 1520.0f,  66.0f };
+    inline const     RectF footer     { 8.0f,   994.0f, 1520.0f,  22.0f };
 
     // -----------------------------------------------------------------------
     //  Header (UI spec section 3) - coordinates are region-local
@@ -65,12 +81,12 @@ namespace nacar::layout
         inline constexpr float dividerBottom  = 66.0f;
 
         inline constexpr float taglineX       = 314.0f;
-        inline constexpr float taglineBase1   = 34.0f;
-        inline constexpr float taglineBase2   = 48.0f;
+        inline constexpr float taglineBase1   = 41.0f;
+        inline constexpr float taglineBase2   = 55.0f;
         inline constexpr float taglineSize    = 8.5f;
         inline constexpr float taglineTrack   = 0.16f;
 
-        inline constexpr RectF presetBar      { 485.0f, 20.0f, 608.0f, 54.0f };
+        inline const     RectF presetBar      { 485.0f, 20.0f, 608.0f, 54.0f };
         inline constexpr float presetBarRadius = 12.0f;
 
         inline constexpr Pt    sourceGlyph    { 523.0f, 47.0f };
@@ -81,13 +97,13 @@ namespace nacar::layout
         inline constexpr Pt    nextArrow      { 882.0f, 47.0f };
         inline constexpr Pt    favourite      { 950.0f, 47.0f };
         inline constexpr float favouriteRadius = 20.0f;
-        inline constexpr RectF browserPill    { 982.0f, 29.0f, 88.0f, 36.0f };
+        inline const     RectF browserPill    { 982.0f, 29.0f, 88.0f, 36.0f };
 
         inline constexpr Pt    gear           { 1237.0f, 43.0f };
         inline constexpr Pt    waveLogo       { 1335.0f, 43.0f };
         inline constexpr float coordX         { 1402.0f };
-        inline constexpr float coordBase1     { 33.0f };
-        inline constexpr float coordBase2     { 47.0f };
+        inline constexpr float coordBase1     { 40.0f };
+        inline constexpr float coordBase2     { 54.0f };
         inline constexpr float coordSize      { 8.5f };
     }
 
@@ -122,7 +138,7 @@ namespace nacar::layout
         inline constexpr float legendWorldBase     = 592.0f;
 
         // WEIGHT mode selector
-        inline constexpr RectF weightModes { 182.0f, 574.0f, 96.0f, 22.0f };
+        inline const     RectF weightModes { 182.0f, 574.0f, 96.0f, 22.0f };
 
         inline constexpr float knobLabelSize  = 9.5f;
         inline constexpr float knobLabelTrack = 0.18f;
@@ -135,21 +151,21 @@ namespace nacar::layout
     {
         inline constexpr float inset          = 19.0f;
 
-        inline constexpr RectF accentBar      { 24.0f, 34.0f, 2.0f, 34.0f };
+        inline const     RectF accentBar      { 24.0f, 34.0f, 2.0f, 34.0f };
         inline constexpr float titleX         = 60.0f;
-        inline constexpr float titleBase      = 38.0f;
+        inline constexpr float titleBase      = 48.0f;
         inline constexpr float titleSize      = 13.0f;
-        inline constexpr float metaBase       = 59.0f;
+        inline constexpr float metaBase       = 67.0f;
         inline constexpr float metaSize       = 9.5f;
-        inline constexpr Pt    pencil         { 271.0f, 53.0f };
+        inline constexpr Pt    pencil         { 271.0f, 61.0f };
 
-        inline constexpr RectF snapPill       { 613.0f, 35.0f, 57.0f, 29.0f };
+        inline const     RectF snapPill       { 613.0f, 35.0f, 57.0f, 29.0f };
         inline constexpr float toolY          = 35.0f;
         inline constexpr float toolSize       = 29.0f;
         inline constexpr float toolX[4]       = { 685.0f, 724.0f, 767.0f, 811.0f };
 
-        inline constexpr RectF waveField      { 19.0f, 84.0f, 840.0f, 160.0f };
-        inline constexpr RectF overviewStrip   { 19.0f, 246.0f, 840.0f, 20.0f };
+        inline const     RectF waveField      { 19.0f, 84.0f, 840.0f, 160.0f };
+        inline const     RectF overviewStrip   { 19.0f, 246.0f, 840.0f, 20.0f };
 
         inline constexpr float transportY     = 299.0f;   // centre line, local
         inline constexpr Pt    playButton     { 53.0f,  299.0f };
@@ -176,19 +192,19 @@ namespace nacar::layout
     {
         inline constexpr Pt    sparkle        { 35.0f, 34.0f };
         inline constexpr float titleX         = 60.0f;
-        inline constexpr float titleBase      = 24.0f;
+        inline constexpr float titleBase      = 45.0f;
         inline constexpr float titleSize      = 25.0f;
         inline constexpr float titleTrack     = 0.06f;
         inline constexpr float subtitleX      = 61.0f;
-        inline constexpr float subtitleBase   = 52.0f;
+        inline constexpr float subtitleBase   = 61.0f;
         inline constexpr float subtitleSize   = 7.5f;
         inline constexpr float subtitleTrack  = 0.20f;
 
         inline constexpr float harmonyLabelX  = 367.0f;
-        inline constexpr float selectorBase   = 32.0f;
-        inline constexpr RectF harmonySeg     { 432.0f, 19.0f, 175.0f, 31.0f };
+        inline constexpr float selectorBase   = 39.0f;
+        inline const     RectF harmonySeg     { 432.0f, 19.0f, 175.0f, 31.0f };
         inline constexpr float distanceLabelX = 637.0f;
-        inline constexpr RectF distanceSeg    { 697.0f, 19.0f, 160.0f, 31.0f };
+        inline const     RectF distanceSeg    { 697.0f, 19.0f, 160.0f, 31.0f };
         inline constexpr float selectorLabelSize  = 8.5f;
         inline constexpr float selectorLabelTrack = 0.16f;
 
@@ -202,13 +218,13 @@ namespace nacar::layout
 
         inline constexpr float actionY        = 143.0f;
         inline constexpr float actionH        = 57.0f;
-        inline constexpr RectF mutateButton   {  22.0f, 143.0f, 183.0f, 57.0f };
-        inline constexpr RectF againButton    { 208.0f, 143.0f, 186.0f, 57.0f };
-        inline constexpr RectF printButton    { 397.0f, 143.0f, 160.0f, 57.0f };
+        inline const     RectF mutateButton   {  22.0f, 143.0f, 183.0f, 57.0f };
+        inline const     RectF againButton    { 208.0f, 143.0f, 186.0f, 57.0f };
+        inline const     RectF printButton    { 397.0f, 143.0f, 160.0f, 57.0f };
         inline constexpr float actionDivider  = 592.0f;
-        inline constexpr RectF makeInstrument { 622.0f, 143.0f, 235.0f, 57.0f };
+        inline const     RectF makeInstrument { 622.0f, 143.0f, 235.0f, 57.0f };
 
-        inline constexpr float preserveBase   = 239.0f;
+        inline constexpr float preserveBase   = 245.0f;
         inline constexpr float preserveLabelX = 24.0f;
         inline constexpr float preserveX0     = 125.0f;
         inline constexpr float preserveSize   = 8.0f;
@@ -225,11 +241,11 @@ namespace nacar::layout
     namespace fx
     {
         inline constexpr float titleX       = 16.0f;
-        inline constexpr float titleBase    = 18.0f;
+        inline constexpr float titleBase    = 25.0f;
         inline constexpr float titleSize    = 8.5f;
         inline constexpr float titleTrack   = 0.18f;
-        inline constexpr RectF addButton    {  95.0f, 11.0f, 22.0f, 22.0f };
-        inline constexpr RectF collapse     { 839.0f, 11.0f, 24.0f, 22.0f };
+        inline const     RectF addButton    {  95.0f, 11.0f, 22.0f, 22.0f };
+        inline const     RectF collapse     { 839.0f, 11.0f, 24.0f, 22.0f };
 
         inline constexpr float cardY        = 55.0f;
         inline constexpr float cardH        = 100.0f;
@@ -237,7 +253,7 @@ namespace nacar::layout
         inline constexpr float cardPitch    = 132.0f;
         inline constexpr float cardX0       = 17.0f;
         inline constexpr float linkY        = 104.0f;
-        inline constexpr RectF addSlot      { 807.0f, 55.0f, 55.0f, 100.0f };
+        inline const     RectF addSlot      { 807.0f, 55.0f, 55.0f, 100.0f };
 
         inline constexpr float nameSize     = 8.5f;
         inline constexpr float nameTrack    = 0.14f;
@@ -304,8 +320,8 @@ namespace nacar::layout
         inline constexpr float sourceSize  = 8.5f;
         inline constexpr float sourceTrack = 0.14f;
 
-        inline constexpr RectF navBar      { 582.0f, 2.0f, 490.0f, 60.0f };
-        inline constexpr RectF navActive   { 597.0f, 8.0f,  90.0f, 48.0f };
+        inline const     RectF navBar      { 582.0f, 2.0f, 490.0f, 60.0f };
+        inline const     RectF navActive   { 597.0f, 8.0f,  90.0f, 48.0f };
         inline constexpr float navCentre[5]= { 642.0f, 739.0f, 832.0f, 921.0f, 1012.0f };
         inline constexpr float navIconY    = 22.0f;
         inline constexpr float navLabelBase= 46.0f;
@@ -313,8 +329,8 @@ namespace nacar::layout
         inline constexpr float navTrack    = 0.14f;
 
         inline constexpr float outputLabelX = 1127.0f;
-        inline constexpr float outputBase   = 38.0f;
-        inline constexpr RectF meter        { 1197.0f, 24.0f, 195.0f, 12.0f };
+        inline constexpr float outputBase   = 35.0f;
+        inline const     RectF meter        { 1197.0f, 24.0f, 195.0f, 12.0f };
         inline constexpr Pt    masterKnob   { 1464.0f, 29.0f };
         inline constexpr float masterRadius = 27.0f;
     }

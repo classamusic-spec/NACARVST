@@ -103,7 +103,7 @@ namespace nacar::ui
         // output - it is never dressed up as a sample.
         waveField.setSynthSource (&visualizer);
         overviewView.setSynthSource (&visualizer);
-        waveField.setSourceLabel ("SYNTH OUTPUT" + middleDot() + "LIVE LEVEL");
+        waveField.setSourceLabel (juce::String ("SYNTH OUTPUT") + middleDot() + "LIVE LEVEL");
 
         visualizer.start();
 
@@ -138,7 +138,7 @@ namespace nacar::ui
     void OpticalViewport::buildButtons()
     {
         const std::array<icons::Icon, 4> toolIcons {
-            icons::waveformMode, icons::listMode, icons::markers, icons::expand
+            icons::Icon::waveformMode, icons::Icon::listMode, icons::Icon::markers, icons::Icon::expand
         };
 
         const std::array<const char*, 4> toolTips {
@@ -368,8 +368,10 @@ namespace nacar::ui
 
     juce::Rectangle<float> OpticalViewport::titleRect() const
     {
+        // Layout.h states every *Base constant as a true text baseline, so the
+        // em box is rebuilt around it rather than started at it.
         const auto font = theme::medium (vp::titleSize);
-        return { vp::titleX, vp::titleBase, titleWidth(), font.getHeight() };
+        return { vp::titleX, vp::titleBase - font.getAscent(), titleWidth(), font.getHeight() };
     }
 
     void OpticalViewport::setViewMode (ViewMode mode)
@@ -452,12 +454,14 @@ namespace nacar::ui
             g.drawText (titleText, titleRect(), juce::Justification::centredLeft, true);
         }
 
+        // vp::metaBase is a true baseline, so the box is rebuilt around it.
         const auto metaFont = theme::medium (vp::metaSize);
 
         g.setColour (theme::glassInkMuted);
         g.setFont (metaFont);
         g.drawText (metaText,
-                    RectF (vp::titleX, vp::metaBase, metaWidth(), metaFont.getHeight()),
+                    RectF (vp::titleX, vp::metaBase - metaFont.getAscent(),
+                           metaWidth(), metaFont.getHeight()),
                     juce::Justification::centredLeft, true);
     }
 
@@ -660,7 +664,7 @@ namespace nacar::ui
             overviewView.setSourceKind (kind);
 
             waveField.setSourceLabel (kind == WaveformView::SourceKind::synthMonitor
-                                        ? "SYNTH OUTPUT" + middleDot() + "LIVE LEVEL"
+                                        ? juce::String ("SYNTH OUTPUT") + middleDot() + "LIVE LEVEL"
                                         : juce::String());
         }
 
@@ -750,7 +754,7 @@ namespace nacar::ui
 
         playing = shouldPlay;
 
-        playButton.setIcon (playing ? icons::pause : icons::play);
+        playButton.setIcon (playing ? icons::Icon::pause : icons::Icon::play);
         playButton.setActive (playing);
 
         lastTransportTime = juce::Time::getMillisecondCounterHiRes() * 0.001;

@@ -143,32 +143,15 @@ namespace nacar::ui
         }};
 
         // -------------------------------------------------------------------
-        //  layout::mut::*Base is the TOP of the em box, not the baseline.
-        //
-        //  UI spec 6 puts the MUTATE baseline at canvas y 492, which is 45 in
-        //  panel-local units, but mut::titleBase is 24.  The same offset shows
-        //  up on all four of this panel's *Base constants, and in every case it
-        //  is one ascent of the type it labels:
-        //
-        //      title     24 + asc(25)  = 44..45   spec 45
-        //      subtitle  52 + asc(7.5) = 58       spec 61
-        //      selector  32 + asc(8.5) = 39       spec 39
-        //      preserve 239 + asc(8)   = 245      spec 245
-        //
-        //  ui::ceramicLabel takes a baseline, so the two are converted here,
-        //  once, rather than each call site inventing its own number.  This is
-        //  reported as a Layout.h inconsistency (layout::hdr::wordmarkBase and
-        //  descriptorBase *are* true baselines) - Layout.h is frozen, so it is
-        //  worked around here and named in the hand-off instead.
+        //  Every layout::mut::*Base constant is a true text baseline, and
+        //  ui::ceramicLabel takes a baseline, so the two meet with no
+        //  conversion.  The indirection is kept because the status line's own
+        //  position is a local constant rather than a layout one, and it is
+        //  worth both going through the same door.
         // -------------------------------------------------------------------
-        float baselineOf (const juce::Font& f, float emBoxTop) noexcept
+        float labelBaseline (float, float baseline)
         {
-            return emBoxTop + f.getAscent();
-        }
-
-        float labelBaseline (float sizePx, float emBoxTop)
-        {
-            return baselineOf (theme::label (sizePx), emBoxTop);
+            return baseline;
         }
 
         /// Both the intent row and the preserve row run to the right edge of
@@ -344,11 +327,12 @@ namespace nacar::ui
             const auto font = theme::display (mut::titleSize);
 
             // theme::drawTracked lays a run out from the TOP of its em box, and
-            // mut::titleBase already is that top (see the note above), so this
+            // mut::titleBase is a baseline, so the ascent comes off here
             // is the one place in the panel that needs no conversion.
             g.setColour (theme::ink);
             theme::drawTracked (g, "MUTATE",
-                                { mut::titleX, mut::titleBase, titleRunWidth, font.getHeight() },
+                                { mut::titleX, mut::titleBase - font.getAscent(),
+                                  titleRunWidth, font.getHeight() },
                                 font, mut::titleTrack);
         }
 

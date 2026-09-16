@@ -72,6 +72,8 @@ namespace nacar::ui
 
         // -- juce::ValueTree::Listener ---------------------------------------
         void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+        void valueTreeParentChanged (juce::ValueTree&) override;
+        void reacquireTree();
 
         NacarProcessor& processor;
         EditorHost& host;

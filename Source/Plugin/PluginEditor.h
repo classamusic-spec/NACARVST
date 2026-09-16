@@ -113,6 +113,7 @@ namespace nacar
         std::unique_ptr<NacarCanvas> canvas;
 
         ui::Page page = ui::Page::main;
+        int slowTick = 0;
         float uiScale = 1.0f;
         bool browserOpen = false;
 

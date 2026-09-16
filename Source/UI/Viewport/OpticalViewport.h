@@ -110,19 +110,19 @@ namespace nacar::ui
         WaveformView waveField    { processor, false };
         WaveformView overviewView { processor, true  };
 
-        IconButton pencilButton { icons::pencil, IconButton::Style::plain };
+        IconButton pencilButton { icons::Icon::pencil, IconButton::Style::plain };
         PillButton snapPill     { "SNAP", PillButton::Style::glass };
 
         std::array<std::unique_ptr<IconButton>, 4> toolButtons;
 
-        IconButton playButton    { icons::play,         IconButton::Style::glassRound };
-        IconButton stopButton    { icons::stop,         IconButton::Style::glassRound };
-        IconButton resetButton   { icons::returnToZero, IconButton::Style::plain };
-        IconButton loopButton    { icons::loop,         IconButton::Style::plain };
-        IconButton trimButton    { icons::trim,         IconButton::Style::plain };
-        IconButton shuffleButton { icons::shuffle,      IconButton::Style::plain };
-        IconButton zoomOutButton { icons::zoomOut,      IconButton::Style::plain };
-        IconButton zoomInButton  { icons::zoomIn,       IconButton::Style::plain };
+        IconButton playButton    { icons::Icon::play,         IconButton::Style::glassRound };
+        IconButton stopButton    { icons::Icon::stop,         IconButton::Style::glassRound };
+        IconButton resetButton   { icons::Icon::returnToZero, IconButton::Style::plain };
+        IconButton loopButton    { icons::Icon::loop,         IconButton::Style::plain };
+        IconButton trimButton    { icons::Icon::trim,         IconButton::Style::plain };
+        IconButton shuffleButton { icons::Icon::shuffle,      IconButton::Style::plain };
+        IconButton zoomOutButton { icons::Icon::zoomOut,      IconButton::Style::plain };
+        IconButton zoomInButton  { icons::Icon::zoomIn,       IconButton::Style::plain };
 
         HairlineSlider zoomSlider;
         juce::TextEditor renameEditor;

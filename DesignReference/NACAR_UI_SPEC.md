@@ -109,8 +109,8 @@ Every recessed glass element carries an **inner shadow** at the top and a
 | ⦀ meter glyph | centre 581, 57 | three vertical bars, violet |
 | Preset name | x 608, baseline y 64 | 17 pt, glass ink |
 | Prev / next arrows | centres 838 / 890, y 57 | chevrons |
-| Favourite (heart) | centre 958, 57 · r 20 | ceramic circle button |
-| `BROWSER` pill | 990, 39, 88 × 36 | ceramic pill, 9 pt, 0.16 em |
+| Favourite (heart) | centre 958, 57 · r 20 | ceramic disc, raised **on** the glass strip |
+| `BROWSER` pill | 990, 39, 88 × 36 | ceramic pill **on** the glass strip, 9 pt, 0.16 em |
 | Settings gear | centre 1245, 53 | ink muted |
 | Wave logo ∿ | centre 1343, 53 | three overlapping arcs, ink |
 | Coordinates | x 1410, baselines y 50 / 64 | `25.7617° N` / `80.1918° W`, 8.5 pt |

@@ -37,10 +37,14 @@ namespace nacar::ui
 
         for (auto& m : modules)
             buildModule (m);
+
+        editorTree.addListener (this);
     }
 
     AtmospherePanel::~AtmospherePanel()
     {
+        editorTree.removeListener (this);
+
         // Each attachment refers to its button, so it has to go first.
         for (auto& m : modules)
             m.powerAttachment.reset();
@@ -102,8 +106,11 @@ namespace nacar::ui
                         { "WEAR",  PID::patinaWear  },
                         { "DRIFT", PID::patinaDrift } };
 
+       #if JUCE_DEBUG
+        // The spec's row count and Layout.h's numParams must agree.
         for (const auto& m : modules)
             jassert ((int) m.rows.size() == m.spec.numParams);
+       #endif
     }
 
     void AtmospherePanel::buildModule (Module& m)
@@ -178,7 +185,10 @@ namespace nacar::ui
 
         // The dot is real state: which parameter the module's knob is on
         // survives closing the editor.
-        editorTree.setProperty (m.selectionProperty, row, nullptr);
+        {
+            const juce::ScopedValueSetter<bool> svs (writingOurselves, true);
+            editorTree.setProperty (m.selectionProperty, row, nullptr);
+        }
 
         repaint();
     }
@@ -322,6 +332,49 @@ namespace nacar::ui
             g.setColour (theme::violet.withMultipliedAlpha (alpha));
             g.fillEllipse (centredSquare (dot, kDotRadius));
         }
+    }
+
+    // =======================================================================
+    //  juce::ValueTree::Listener
+    //
+    //  The selection is persisted, so it can also arrive from outside - a host
+    //  state restore, or a preset that carried an editor tree.
+    // =======================================================================
+    void AtmospherePanel::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
+    {
+        if (writingOurselves || tree != editorTree)
+            return;
+
+        for (auto& m : modules)
+            if (property == m.selectionProperty)
+                setSelectedRow (m, (int) editorTree.getProperty (property, 0));
+    }
+
+    void AtmospherePanel::valueTreeParentChanged (juce::ValueTree& tree)
+    {
+        if (tree != editorTree || editorTree.getParent().isValid())
+            return;
+
+        // Restoring host state detaches every child of SESSION before adding
+        // the restored ones, so the EDITOR tree we hold is briefly an orphan.
+        // Pick the new one up once the restore has finished.
+        juce::Component::SafePointer<AtmospherePanel> safe (this);
+
+        juce::MessageManager::callAsync ([safe]
+                                         {
+                                             if (safe != nullptr)
+                                                 safe->reacquireTree();
+                                         });
+    }
+
+    void AtmospherePanel::reacquireTree()
+    {
+        editorTree.removeListener (this);
+        editorTree = processor.getStateManager().group (ids::EDITOR);
+        editorTree.addListener (this);
+
+        for (auto& m : modules)
+            setSelectedRow (m, (int) editorTree.getProperty (m.selectionProperty, 0));
     }
 
     // =======================================================================

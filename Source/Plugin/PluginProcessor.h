@@ -31,6 +31,11 @@ namespace nacar
         bool isBusesLayoutSupported (const BusesLayout&) const override;
         void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
+        // NACAR renders in single precision.  The double-precision overload is
+        // pulled back into scope rather than hidden, so the base class's
+        // default still handles a host that asks for it.
+        using juce::AudioProcessor::processBlock;
+
         juce::AudioProcessorEditor* createEditor() override;
         bool hasEditor() const override { return true; }
 

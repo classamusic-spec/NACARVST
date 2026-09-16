@@ -242,14 +242,17 @@ namespace nacar::icons
 
                 case Icon::waveLogo:
                 {
-                    // Three half-circles on a shared baseline.  The outer two
-                    // overlap the centre one so the silhouette reads as a
-                    // single wave rather than as three separate humps.
-                    constexpr float base = 66.0f;
+                    // The brand mark: three arcs, up-down-up, meeting end to end
+                    // on a line at y 46 so the three read as one wave.  They are
+                    // elliptical, and the middle one is drawn deeper than the
+                    // crests either side - that asymmetry is what keeps the mark
+                    // from collapsing into a plain sine.
+                    constexpr float rx   = 14.0f;
+                    constexpr float base = 46.0f;
 
-                    p.addCentredArc (30.0f, base, 22.0f, 22.0f, 0.0f, -pi * 0.5f, pi * 0.5f, true);
-                    p.addCentredArc (50.0f, base, 32.0f, 32.0f, 0.0f, -pi * 0.5f, pi * 0.5f, true);
-                    p.addCentredArc (70.0f, base, 22.0f, 22.0f, 0.0f, -pi * 0.5f, pi * 0.5f, true);
+                    p.addCentredArc (22.0f, base, rx, 19.0f, 0.0f, -pi * 0.5f, pi * 0.5f, true);
+                    p.addCentredArc (50.0f, base, rx, 27.0f, 0.0f, pi * 1.5f, pi * 0.5f, false);
+                    p.addCentredArc (78.0f, base, rx, 19.0f, 0.0f, -pi * 0.5f, pi * 0.5f, false);
                     break;
                 }
 
@@ -363,7 +366,7 @@ namespace nacar::icons
                     // back down towards it.
                     addLine (p, 16.0f, 24.0f, 16.0f, 76.0f);
                     p.addCentredArc (58.0f, 50.0f, 25.0f, 25.0f, 0.0f, pi * 1.25f, -pi * 0.25f, true);
-                    addArrowHead (p, { 40.32f, 32.32f }, { -0.707f, 0.707f }, 14.0f, 9.0f);
+                    addArrowHead (p, { 40.32f, 32.32f }, { -0.707f, 0.707f }, 17.0f, 11.0f);
                     break;
 
                 case Icon::loop:
@@ -445,9 +448,10 @@ namespace nacar::icons
 
                 case Icon::makeInstrument:
                     // The button draws its own trailing chevron, so this is the
-                    // waveform only.
+                    // waveform only - and it is inset a little, because the
+                    // chevron will sit immediately to its right.
                     addWaveformBars (p, { 0.34f, 0.70f, 0.95f, 0.55f, 0.88f, 0.62f, 0.38f },
-                                     10.0f, 90.0f, 50.0f, 38.0f, 8.0f);
+                                     14.0f, 86.0f, 50.0f, 38.0f, 9.0f);
                     break;
 
                 case Icon::arrowRight:
@@ -493,21 +497,35 @@ namespace nacar::icons
 
                 case Icon::link:
                 {
-                    // Two capsules on a 45 degree axis, offset along it so they
-                    // interlock.  Built off-origin and rotated, because a
-                    // rotated rounded rectangle is the only honest way to get
-                    // the ends right.
-                    juce::Path segment;
-                    segment.addRoundedRectangle (-26.0f, -12.0f, 52.0f, 24.0f, 12.0f);
+                    // Two open hooks on a 45 degree axis with their mouths
+                    // facing, plus a bar tucked into both.  The break between
+                    // them is the whole glyph: two closed capsules offset along
+                    // the same axis just read as one long pill.
+                    //
+                    //  s runs along the link, t across it.
+                    const Pt origin { 50.0f, 50.0f };
+                    const Pt along  { 0.70711f, -0.70711f };
+                    const Pt across { 0.70711f,  0.70711f };
 
-                    for (auto centre : { Pt { 38.0f, 62.0f }, Pt { 62.0f, 38.0f } })
+                    auto at = [origin, along, across] (float s, float t)
                     {
-                        juce::Path link (segment);
-                        link.applyTransform (juce::AffineTransform::rotation (-pi * 0.25f)
-                                                 .translated (centre.x, centre.y));
-                        p.addPath (link);
+                        return origin + along * s + across * t;
+                    };
+
+                    for (const float hook : { 1.0f, -1.0f })
+                    {
+                        const auto cap = at (31.0f * hook, 0.0f);
+
+                        p.startNewSubPath (at (10.0f * hook, -13.0f * hook));
+                        p.lineTo (at (31.0f * hook, -13.0f * hook));
+                        p.addCentredArc (cap.x, cap.y, 13.0f, 13.0f, 0.0f,
+                                         hook > 0.0f ? -pi * 0.25f : pi * 0.75f,
+                                         hook > 0.0f ?  pi * 0.75f : pi * 1.75f, false);
+                        p.lineTo (at (10.0f * hook, 13.0f * hook));
                     }
 
+                    p.startNewSubPath (at (-17.0f, 0.0f));
+                    p.lineTo (at (17.0f, 0.0f));
                     break;
                 }
 
@@ -615,14 +633,17 @@ namespace nacar::icons
                 case Icon::navMain:
                     // House silhouette with eaves; drawn solid so that the
                     // active nav item can simply take the violet fill.
-                    addRoundedPolygon (p, { { 50.0f, 10.0f }, { 90.0f, 46.0f }, { 78.0f, 46.0f },
-                                            { 78.0f, 86.0f }, { 22.0f, 86.0f }, { 22.0f, 46.0f },
-                                            { 10.0f, 46.0f } }, 5.0f);
+                    addRoundedPolygon (p, { { 50.0f, 13.0f }, { 91.0f, 48.0f }, { 80.0f, 48.0f },
+                                            { 80.0f, 86.0f }, { 20.0f, 86.0f }, { 20.0f, 48.0f },
+                                            { 9.0f, 48.0f } }, 5.0f);
                     break;
 
                 case Icon::navMod:
-                    addPolyline (p, { { 8.0f, 72.0f }, { 29.0f, 28.0f }, { 50.0f, 72.0f },
-                                      { 71.0f, 28.0f }, { 92.0f, 72.0f } });
+                    // Triangle LFO.  It starts and ends mid-travel rather than
+                    // at a trough, which is what keeps it from reading as a
+                    // letter M.
+                    addPolyline (p, { { 8.0f, 50.0f }, { 22.0f, 28.0f }, { 50.0f, 72.0f },
+                                      { 78.0f, 28.0f }, { 92.0f, 50.0f } });
                     break;
 
                 case Icon::navFx:

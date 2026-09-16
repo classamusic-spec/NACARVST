@@ -14,49 +14,61 @@ namespace nacar::ui
     // =======================================================================
     namespace
     {
-        /// A knob draws its seat groove and its violet value arc *outside* the
-        /// body radius in macro::KnobSpec, so every knob component is its
-        /// layout::knobBounds() grown by this much.  Growing uniformly keeps
-        /// the cap centred on the spec centre.
-        constexpr float knobPadding = 10.0f;
+        /// ui::NacarKnob lays its seat groove and value arc outside the cap, and
+        /// derives capRadius() from half its component's shorter side minus that
+        /// allowance - 1.5 clearance + 5 groove + 0.5 lip.  Growing
+        /// layout::knobBounds() by exactly the allowance therefore puts the cap
+        /// on the spec centre at the spec radius, with the groove in the margin.
+        constexpr float knobSeatAllowance = 7.0f;
+
+        /// Extra height under every knob.  NacarKnob hangs its cap from the top
+        /// of the component and drops the name below it, so the parent has to
+        /// size the component tall enough to contain the name and its
+        /// descenders - see the note in ui::NacarKnob::paint.
+        constexpr float knobLabelRoom = 20.0f;
 
         /// Half the generation-selector row pitch: macro::genY steps by 34.
         constexpr float genRowHalf = 17.0f;
+
+        /// ui::GenerationSelector insets its dot from its own left edge so the
+        /// active dot's glow is not clipped, and lays the numerals out relative
+        /// to that.  Pulling the component left by the same amount lands the dot
+        /// on macro::genDotX and the numerals on macro::genLabelX.
+        constexpr float genDotInset = macro::genDotRActive + 1.0f;
 
         /// Right edge of the generation column, panel-local.  Layout.h fixes
         /// macro::genDotX and macro::genLabelX but not where the column stops;
         /// 300 leaves the panel's own 17 px right margin intact.
         constexpr float genRight = 300.0f;
 
-        /// Height of the row a scale legend occupies.  macro::legendSize is the
-        /// type size; the row has to be tall enough for ui::scaleLegend to set
-        /// the two ends and the hairline between them.
+        /// Height of the row a scale legend occupies; ui::scaleLegend hangs its
+        /// hairline on the row's vertical centre.
         constexpr float legendRowHeight = 12.0f;
 
-        /// Distance from the legend row's vertical centre down to the baseline
-        /// quoted in macro::legend*Base.  This assumes ui::scaleLegend sets its
-        /// two ends centred in the area it is handed, which is the only
-        /// placement its signature allows.
-        constexpr float legendBaselineDrop = 3.0f;
-
-        /// WORLD's INTIMATE - EXPANSIVE will not fit the 96 px horizontal extent
-        /// of a 48 px knob, so its legend is allowed to run 20 px past the body
-        /// on each side.  It still clears WEIGHT's column, which starts at 180.
+        /// WORLD's INTIMATE - EXPANSIVE does not fit the 96 px horizontal extent
+        /// of a 48 px knob, so its legend runs 20 px past the body on each side.
+        /// It still clears WEIGHT's column, which starts at x 173.
         constexpr float worldLegendWiden = 20.0f;
 
         juce::Rectangle<int> knobArea (const macro::KnobSpec& k)
         {
-            return knobBounds (k).expanded (knobPadding).toNearestInt();
+            const auto seat = knobBounds (k).expanded (knobSeatAllowance);
+
+            // Grown downwards only: the cap hangs from the top, so the extra
+            // height becomes label room instead of moving the cap.
+            return seat.withHeight (seat.getHeight() + knobLabelRoom).toNearestInt();
         }
 
         RectF legendArea (const macro::KnobSpec& k, float baseline, float widen = 0.0f)
         {
-            const float halfWidth = k.radius + widen;
+            // ui::scaleLegend derives its baseline from the vertical centre of
+            // the area it is handed, so the area is centred on whatever puts the
+            // type on the baseline the reference transcribes.
+            const auto  font    = theme::label (macro::legendSize);
+            const float centreY = baseline - (font.getAscent() - font.getHeight() * 0.5f);
 
-            return { k.centre.x - halfWidth,
-                     baseline - legendBaselineDrop - legendRowHeight * 0.5f,
-                     halfWidth * 2.0f,
-                     legendRowHeight };
+            return RectF ((k.radius + widen) * 2.0f, legendRowHeight)
+                       .withCentre ({ k.centre.x, centreY });
         }
 
         juce::String paramTip (PID p)
@@ -145,12 +157,12 @@ namespace nacar::ui
         // --------------------------------------------------------------------
         //  Scale legends.
         //
-        //  Drawn here rather than handed to NacarKnob::setScaleLegend.  Every
-        //  macro::legend*Base sits below the knob component that would have to
-        //  draw it - CHARACTER's component ends at y 371 (centre 313, radius 48,
-        //  grown by knobPadding) and its legend baseline is 398 - and WORLD's
-        //  INTIMATE - EXPANSIVE is wider than its 96 px body besides.  Drawing
-        //  in the panel is the only way to land on the transcribed baselines.
+        //  Drawn here rather than handed to NacarKnob::setScaleLegend.  The knob
+        //  places a legend a fixed gap below the name it paints, which lands it
+        //  4 px above macro::legendCharacterBase and 14 px above
+        //  macro::legendWorldBase; and WORLD's INTIMATE - EXPANSIVE is wider
+        //  than its 96 px body besides.  Drawing all three in the panel is the
+        //  only way to land every one on its transcribed baseline.
         // --------------------------------------------------------------------
         scaleLegend (g, "CLEAN", "WORN",
                      legendArea (macro::character, macro::legendCharacterBase));
@@ -174,9 +186,9 @@ namespace nacar::ui
 
         // The I / II / III / IV column beside MEMORY: the four dot rows, from
         // the dots out to the right edge of the column.
-        generation.setBounds (RectF (macro::genDotX,
+        generation.setBounds (RectF (macro::genDotX - genDotInset,
                                      macro::genY[0] - genRowHalf,
-                                     genRight - macro::genDotX,
+                                     genRight - (macro::genDotX - genDotInset),
                                      (macro::genY[3] - macro::genY[0]) + genRowHalf * 2.0f)
                                   .toNearestInt());
 

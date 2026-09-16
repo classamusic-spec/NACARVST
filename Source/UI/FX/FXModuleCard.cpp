@@ -153,30 +153,18 @@ namespace nacar::ui
         const auto b = getLocalBounds().toFloat();
 
         // -- body ----------------------------------------------------------
-        // Glass is a cut-out, never a raised element, so a dragged card is
-        // lifted by brightening its fill and rimming it - not by a drop shadow.
-        g.setColour (dragging ? theme::glassEdge : theme::glassRaised);
-        g.fillRoundedRectangle (b, radiusCard);
+        // A card is a cut-out in the panel's glass, so it carries the same
+        // vocabulary the panel does - flat fill, inner top shadow, glassEdge
+        // hairline - with a raised fill and the card radius.  Glass never gets
+        // a drop shadow, so a dragged card is lifted by brightening its fill
+        // and rimming it instead.
+        theme::glassSurface (g, b, radiusCard, dragging ? theme::glassEdge : theme::glassRaised);
 
-        if (! dragging)
+        if (selected || dragging)
         {
-            // Inner top shadow: the same cut-out vocabulary as the panel, at
-            // card scale.
-            juce::Graphics::ScopedSaveState ss (g);
-
-            juce::Path clip;
-            clip.addRoundedRectangle (b, radiusCard);
-            g.reduceClipRegion (clip);
-
-            g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.28f),
-                                                     b.getCentreX(), b.getY(),
-                                                     juce::Colours::transparentBlack,
-                                                     b.getCentreX(), b.getY() + 10.0f, false));
-            g.fillRect (b.withHeight (10.0f));
+            g.setColour (selected ? theme::violet : theme::violetDeep);
+            g.drawRoundedRectangle (b.reduced (0.5f), radiusCard, 1.0f);
         }
-
-        g.setColour (selected ? theme::violet : (dragging ? theme::violetDeep : theme::glassEdge));
-        g.drawRoundedRectangle (b.reduced (0.5f), radiusCard, 1.0f);
 
         // Bypassed modules are still in the chain but are not doing anything,
         // so the whole card reads back.

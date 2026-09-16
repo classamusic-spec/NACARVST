@@ -206,14 +206,24 @@ namespace nacar
 
     void NacarEditor::timerCallback()
     {
-        // The chassis animates: meters, waveform playhead, voice activity.
-        // Each region repaints only what it owns.
-        if (canvas != nullptr)
-        {
-            canvas->bottom().repaint();
+        if (canvas == nullptr)
+            return;
 
-            if (page == ui::Page::main)
-                canvas->viewport().repaint();
+        // The meter and the waveform playhead move every frame.
+        canvas->bottom().repaint();
+
+        if (page == ui::Page::main)
+            canvas->viewport().repaint();
+
+        // Knobs follow host automation on their own timer, but the segmented
+        // controls, switches and the generation selector read their parameter
+        // inside paint() - they have no clock of their own. A slower sweep of
+        // the whole chassis keeps them honest without repainting everything at
+        // 30 Hz.
+        if (++slowTick >= 4)
+        {
+            slowTick = 0;
+            canvas->repaint();
         }
     }
 

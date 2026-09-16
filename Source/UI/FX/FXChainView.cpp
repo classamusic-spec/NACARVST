@@ -77,7 +77,7 @@ namespace nacar::ui
           fxTree (p.getStateManager().group (ids::FXCHAIN)),
           addButton (icons::Icon::plus, IconButton::Style::glassSquare),
           collapseButton (icons::Icon::collapse, IconButton::Style::plain),
-          addSlotButton ({}, PillButton::Style::dashed)
+          addSlotButton (juce::String(), PillButton::Style::dashed)
     {
         // A session written by an older build may not carry an order at all.
         if (! fxTree.hasProperty (ids::fxOrder))
@@ -559,6 +559,37 @@ namespace nacar::ui
         {
             setCollapsed ((bool) fxTree.getProperty (fxCollapsedId, false));
         }
+    }
+
+    void FXChainView::valueTreeParentChanged (juce::ValueTree& tree)
+    {
+        if (tree != fxTree || fxTree.getParent().isValid())
+            return;
+
+        // Restoring host state copies a whole new SESSION over the old one:
+        // every child is detached first and the restored ones are added after,
+        // so the FXCHAIN we hold is briefly an orphan and re-reading it now
+        // would find nothing.  Pick the new one up once the restore is done.
+        juce::Component::SafePointer<FXChainView> safe (this);
+
+        juce::MessageManager::callAsync ([safe]
+                                         {
+                                             if (safe != nullptr)
+                                                 safe->reacquireTree();
+                                         });
+    }
+
+    void FXChainView::reacquireTree()
+    {
+        fxTree.removeListener (this);
+        fxTree = processor.getStateManager().group (ids::FXCHAIN);
+        fxTree.addListener (this);
+
+        if (! fxTree.hasProperty (ids::fxOrder))
+            fxTree.setProperty (ids::fxOrder, defaultOrderString(), nullptr);
+
+        setCollapsed ((bool) fxTree.getProperty (fxCollapsedId, false));
+        rebuildCards();
     }
 
     // =======================================================================

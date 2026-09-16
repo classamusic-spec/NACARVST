@@ -48,27 +48,31 @@ namespace nacar::ui
     static constexpr float meterWarnMix = 0.55f;
 
     // -----------------------------------------------------------------------
-    //  Source pills and nav items, in reference order.
+    //  Source pills and nav items, in reference order.  File-local: other
+    //  panels are being written against the same headers in parallel.
     // -----------------------------------------------------------------------
-    struct SourceSpec { icons::Icon icon; const char* text; };
+    namespace
+    {
+        struct SourceSpec { icons::Icon icon; const char* text; };
 
-    static constexpr SourceSpec sourceSpecs[5] = {
-        { icons::Icon::srcSynth,     "SYNTH"     },
-        { icons::Icon::srcSample,    "SAMPLE"    },
-        { icons::Icon::srcGrain,     "GRAIN"     },
-        { icons::Icon::srcResonator, "RESONATOR" },
-        { icons::Icon::srcSpectral,  "SPECTRAL"  }
-    };
+        constexpr SourceSpec sourceSpecs[5] = {
+            { icons::Icon::srcSynth,     "SYNTH"     },
+            { icons::Icon::srcSample,    "SAMPLE"    },
+            { icons::Icon::srcGrain,     "GRAIN"     },
+            { icons::Icon::srcResonator, "RESONATOR" },
+            { icons::Icon::srcSpectral,  "SPECTRAL"  }
+        };
 
-    struct NavSpec { icons::Icon icon; const char* text; };
+        struct NavSpec { icons::Icon icon; const char* text; };
 
-    static constexpr NavSpec navSpecs[5] = {
-        { icons::Icon::navMain, "MAIN" },
-        { icons::Icon::navMod,  "MOD"  },
-        { icons::Icon::navFx,   "FX"   },
-        { icons::Icon::navSeq,  "SEQ"  },
-        { icons::Icon::navMix,  "MIX"  }
-    };
+        constexpr NavSpec navSpecs[5] = {
+            { icons::Icon::navMain, "MAIN" },
+            { icons::Icon::navMod,  "MOD"  },
+            { icons::Icon::navFx,   "FX"   },
+            { icons::Icon::navSeq,  "SEQ"  },
+            { icons::Icon::navMix,  "MIX"  }
+        };
+    }
 
     /** The slot rect for navigation item i, region-local.
 
@@ -138,14 +142,16 @@ namespace nacar::ui
                              .withCentre ({ b.getCentreX(), iconCentreY }),
                          tint, 1.5f);
 
-            // drawTracked places the run from the top of the em box, so the
-            // baseline is reached by backing off the ascent.
-            const auto f = theme::label (bottom::navSize);
-            g.setColour (tint);
-            theme::drawTracked (g, text,
-                                { b.getX(), labelBaseline - f.getAscent(),
-                                  b.getWidth(), f.getHeight() },
-                                f, bottom::navTrack, juce::Justification::centred);
+            // The caption is centred on the slot; ceramic when the item is
+            // raised, glass otherwise, because that is the surface it sits on.
+            const juce::Point<float> caption { b.getCentreX(), labelBaseline };
+
+            if (active)
+                ceramicLabel (g, text, caption, bottom::navSize, bottom::navTrack,
+                              tint, juce::Justification::centred);
+            else
+                glassLabel (g, text, caption, bottom::navSize, bottom::navTrack,
+                            tint, juce::Justification::centred);
         }
 
         void mouseEnter (const juce::MouseEvent&) override { hovered = true;  repaint(); }

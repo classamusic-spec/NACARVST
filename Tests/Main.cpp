@@ -4518,6 +4518,471 @@ struct MutationTests : juce::UnitTest
     }
 };
 
+#include "../Source/Audio/Sources/Sample/SampleEngine.h"
+#include "../Source/Audio/Sources/Sample/SampleLoader.h"
+
+// ===========================================================================
+//  SAMPLE  -  phase 18
+//
+//  The engine, the loader and the slot were written but never tested: their
+//  author was cut off at "now the tests". The first case below is the one that
+//  matters most, because it is the hazard SampleBuffer.h exists to prevent and
+//  it is invisible to every other kind of check - a realtime violation that
+//  produces correct audio right up until it drops a buffer in the callback.
+// ===========================================================================
+struct SampleTests : juce::UnitTest
+{
+    SampleTests() : juce::UnitTest ("Sample", "nacar") {}
+
+    static constexpr double kRate = 48000.0;
+
+    /** A SampleBuffer that says when it dies. The base destructor is virtual
+        through juce::ReferenceCountedObject, so this is a legal hook and not a
+        trick. */
+    struct Counted : SampleBuffer
+    {
+        explicit Counted (std::atomic<int>& c) : counter (c) {}
+        ~Counted() override { ++counter; }
+        std::atomic<int>& counter;
+    };
+
+    static SampleBuffer::Ptr makeTone (double hz, double seconds, int channels = 2,
+                                       double rate = kRate)
+    {
+        SampleBuffer::Ptr s = new SampleBuffer();
+        const int n = juce::jmax (1, (int) (rate * seconds));
+
+        s->audio.setSize (juce::jmax (1, channels), n);
+        s->sourceRate = rate;
+        s->displayName = "TONE";
+
+        for (int c = 0; c < s->audio.getNumChannels(); ++c)
+            for (int i = 0; i < n; ++i)
+                s->audio.setSample (c, i, (float) (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi
+                                                                   * hz * (double) i / rate)));
+        return s;
+    }
+
+    /** Renders the engine for a while with one note held, and hands back what
+        came out. */
+    static juce::AudioBuffer<float> render (SampleEngine& engine, const ParameterRegistry& p,
+                                            int note, int blocks, int blockSize = 256)
+    {
+        juce::AudioBuffer<float> out (2, blocks * blockSize);
+        out.clear();
+
+        juce::AudioBuffer<float> block (2, blockSize);
+        MacroState macros;
+        macros.sampleRate = kRate;
+
+        for (int b = 0; b < blocks; ++b)
+        {
+            block.clear();
+            macros.numSamples = blockSize;
+
+            juce::MidiBuffer midi;
+
+            if (b == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, note, 1.0f), 0);
+
+            engine.process (block, midi, p, macros);
+
+            for (int c = 0; c < 2; ++c)
+                out.copyFrom (c, b * blockSize, block, c, 0, blockSize);
+        }
+
+        return out;
+    }
+
+    static double rms (const juce::AudioBuffer<float>& b, int from = 0, int to = -1)
+    {
+        if (to < 0) to = b.getNumSamples();
+        double sum = 0.0; int count = 0;
+
+        for (int c = 0; c < b.getNumChannels(); ++c)
+            for (int i = from; i < to && i < b.getNumSamples(); ++i, ++count)
+                sum += (double) b.getSample (c, i) * b.getSample (c, i);
+
+        return count > 0 ? std::sqrt (sum / (double) count) : 0.0;
+    }
+
+    /** Zero crossings per second, which is a cheap and robust pitch check for
+        a sine and needs no FFT. */
+    static double crossingRate (const juce::AudioBuffer<float>& b, int from, int to)
+    {
+        const auto* d = b.getReadPointer (0);
+        int crossings = 0;
+
+        for (int i = juce::jmax (1, from); i < to && i < b.getNumSamples(); ++i)
+            if (d[i - 1] < 0.0f && d[i] >= 0.0f)
+                ++crossings;
+
+        const double seconds = (double) (to - from) / kRate;
+        return seconds > 0.0 ? (double) crossings / seconds : 0.0;
+    }
+
+    void runTest() override
+    {
+        beginTest ("the audio thread never destroys a sample");
+        {
+            // THE hazard. Reference counting makes the read safe, but if the
+            // reader drops the last reference it runs the destructor - freeing
+            // megabytes inside the audio callback. SampleBuffer.h promises that
+            // cannot happen; this is the proof.
+            std::atomic<int> destroyed { 0 };
+
+            SampleSlot slot;
+
+            {
+                SampleBuffer::Ptr first = new Counted (destroyed);
+                first->audio.setSize (2, 1024);
+                first->audio.clear();
+                slot.publish (first);
+            }
+            // The test's own reference is gone; only the slot holds it now.
+
+            // The "audio thread" takes a look, exactly as the engine would.
+            {
+                auto held = slot.acquire();
+                expect (held != nullptr, "the slot published nothing");
+            }
+
+            expect (destroyed.load() == 0, "the buffer died while the slot still held it");
+
+            // A second file arrives. The first must be RETIRED, not freed.
+            {
+                SampleBuffer::Ptr second = new SampleBuffer();
+                second->audio.setSize (2, 1024);
+                second->audio.clear();
+                slot.publish (second);
+            }
+
+            expect (destroyed.load() == 0,
+                    "publish() freed the outgoing buffer instead of retiring it - "
+                    "that free would have happened on whichever thread called publish");
+
+            expect (slot.hasRetired(), "nothing was retired, so nothing was kept alive");
+
+            // Only the message thread may actually free it.
+            slot.collectGarbage();
+
+            expect (destroyed.load() == 1,
+                    "collectGarbage() did not free the retired buffer");
+            expect (! slot.hasRetired(), "something is still retired after a collect");
+        }
+
+        beginTest ("acquiring from an empty slot is silence, not a crash");
+        {
+            SampleSlot slot;
+            expect (slot.acquire() == nullptr, "an empty slot handed out a buffer");
+
+            slot.collectGarbage();          // must be safe with nothing to do
+            expect (! slot.hasRetired());
+        }
+
+        beginTest ("no sample loaded is exactly silence");
+        {
+            TestHost host;
+
+            // The engine gates on source_mode: it is called every block
+            // whatever the setting says, but contributes nothing unless
+            // SAMPLE is the selected source. A test that forgets this
+            // measures silence and blames the engine.
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const auto out = render (engine, host.registry, 60, 20);
+
+            float peak = 0.0f;
+            for (int c = 0; c < out.getNumChannels(); ++c)
+                peak = juce::jmax (peak, out.getMagnitude (c, 0, out.getNumSamples()));
+
+            expect (peak == 0.0f,
+                    "an engine with no sample produced " + juce::String (peak)
+                        + " - it must be silent, not a placeholder");
+        }
+
+        beginTest ("at the root note the sample plays at its own pitch");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+            slot.publish (makeTone (440.0, 2.0));
+
+            host.registry.setFromUI (PID::sampleRootNote, 60.0f);
+            host.registry.setFromUI (PID::sampleTune, 0.0f);
+            host.registry.setFromUI (PID::sampleKeyTrack, 1.0f);
+            host.registry.setFromUI (PID::sampleGain, 0.0f);
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const auto out = render (engine, host.registry, 60, 120);
+
+            const int from = (int) (0.05 * kRate), to = (int) (0.5 * kRate);
+            const double hz = crossingRate (out, from, to);
+
+            logMessage ("    root note renders " + juce::String (hz, 1) + " Hz (source is 440)");
+
+            expect (std::abs (hz - 440.0) < 12.0,
+                    "at the root note the sample should play untransposed, got "
+                        + juce::String (hz, 1) + " Hz");
+        }
+
+        beginTest ("key tracking transposes by the interval played");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+            slot.publish (makeTone (440.0, 2.0));
+
+            host.registry.setFromUI (PID::sampleRootNote, 60.0f);
+            host.registry.setFromUI (PID::sampleKeyTrack, 1.0f);
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const int from = (int) (0.05 * kRate), to = (int) (0.4 * kRate);
+
+            const auto octave = render (engine, host.registry, 72, 120);
+            const double up = crossingRate (octave, from, to);
+
+            logMessage ("    an octave up renders " + juce::String (up, 1) + " Hz (880 expected)");
+
+            expect (std::abs (up - 880.0) < 25.0,
+                    "an octave up should double the pitch, got " + juce::String (up, 1) + " Hz");
+
+            engine.reset();
+
+            const auto fifth = render (engine, host.registry, 67, 120);
+            const double f = crossingRate (fifth, from, to);
+
+            expect (std::abs (f - 440.0 * 1.49831) < 20.0,
+                    "a fifth up should be about 659 Hz, got " + juce::String (f, 1) + " Hz");
+        }
+
+        beginTest ("key tracking at zero ignores the note played");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+            slot.publish (makeTone (440.0, 2.0));
+
+            host.registry.setFromUI (PID::sampleRootNote, 60.0f);
+            host.registry.setFromUI (PID::sampleKeyTrack, 0.0f);
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const int from = (int) (0.05 * kRate), to = (int) (0.4 * kRate);
+            const auto out = render (engine, host.registry, 72, 120);
+
+            expect (std::abs (crossingRate (out, from, to) - 440.0) < 15.0,
+                    "with key tracking off, an octave up should still play at 440 Hz");
+        }
+
+        beginTest ("reverse plays the sample backwards and nothing else");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+
+            // A ramp, so forwards and backwards are trivially distinguishable.
+            SampleBuffer::Ptr ramp = new SampleBuffer();
+            const int n = (int) (0.5 * kRate);
+            ramp->audio.setSize (1, n);
+            ramp->sourceRate = kRate;
+
+            for (int i = 0; i < n; ++i)
+                ramp->audio.setSample (0, i, (float) i / (float) n * 0.8f);
+
+            slot.publish (ramp);
+
+            host.registry.setFromUI (PID::sampleRootNote, 60.0f);
+            host.registry.setFromUI (PID::sampleKeyTrack, 0.0f);
+            host.registry.setFromUI (PID::sampleReverse, 1.0f);
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const auto out = render (engine, host.registry, 60, 60);
+
+            // A reversed ramp starts loud and ends quiet.
+            const double early = rms (out, (int) (0.02 * kRate), (int) (0.08 * kRate));
+            const double late  = rms (out, (int) (0.30 * kRate), (int) (0.40 * kRate));
+
+            logMessage ("    reversed ramp: early " + juce::String (early, 4)
+                            + ", late " + juce::String (late, 4));
+
+            expect (early > late * 1.5,
+                    "reverse did not play the ramp backwards (early " + juce::String (early, 4)
+                        + " vs late " + juce::String (late, 4) + ")");
+        }
+
+        beginTest ("the loop seam does not click");
+        {
+            // The same lesson the FX click test had to learn: measure the
+            // sample-to-sample step against the programme's OWN worst step, and
+            // use a source whose steps are small. A ramp or a noise burst would
+            // hide a seam inside its own discontinuities.
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+            slot.publish (makeTone (220.0, 1.0, 1));
+
+            host.registry.setFromUI (PID::sampleRootNote, 60.0f);
+            host.registry.setFromUI (PID::sampleKeyTrack, 0.0f);
+            host.registry.setFromUI (PID::sampleLoop, 1.0f);
+            host.registry.setFromUI (PID::sampleLoopStart, 0.10f);
+            host.registry.setFromUI (PID::sampleLoopEnd, 0.40f);
+            host.registry.setFromUI (PID::sampleCrossfade, 0.10f);
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const auto out = render (engine, host.registry, 60, 400);
+
+            const int n = out.getNumSamples();
+            const int settle = (int) (0.05 * kRate);
+
+            float worst = 0.0f;
+            for (int i = settle + 1; i < n; ++i)
+                worst = juce::jmax (worst, std::abs (out.getSample (0, i) - out.getSample (0, i - 1)));
+
+            // A 220 Hz sine at this level steps by about 0.014 per sample.
+            const float expected = (float) (2.0 * juce::MathConstants<double>::pi * 220.0 / kRate * 0.5);
+
+            logMessage ("    worst step through " + juce::String ((double) n / kRate, 2)
+                            + " s of looping: " + juce::String (worst, 5)
+                            + " (a clean 220 Hz sine steps " + juce::String (expected, 5) + ")");
+
+            expect (worst < expected * 4.0f,
+                    "the loop seam clicks: worst step " + juce::String (worst, 5)
+                        + " against " + juce::String (expected, 5) + " for the tone itself");
+
+            expect (rms (out, n / 2, n) > 0.01,
+                    "the loop stopped sounding partway through");
+        }
+
+        beginTest ("a decode that fails leaves the instrument playable");
+        {
+            SampleSlot slot;
+            SampleLoader loader (slot);
+
+            bool finished = false;
+            SampleLoader::Result got;
+
+            loader.onFinished = [&finished, &got] (const SampleLoader::Result& r)
+            {
+                finished = true;
+                got = r;
+            };
+
+            loader.loadAsync (juce::File ("/nonexistent/nacar-test-no-such-file.wav"));
+
+            // The loader is asynchronous; poll it the way the editor's timer does.
+            const auto deadline = juce::Time::getMillisecondCounter() + 4000;
+
+            while (! finished && juce::Time::getMillisecondCounter() < deadline)
+            {
+                loader.poll();
+                juce::Thread::sleep (10);
+            }
+
+            expect (finished, "the loader never reported back on a missing file");
+            expect (! got.ok, "a missing file was reported as a successful decode");
+            expect (got.error.isNotEmpty(), "a failure carried no message for the user");
+
+            expect (slot.acquire() == nullptr,
+                    "a failed decode left something in the slot");
+
+            // And the engine still runs.
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            const auto out = render (engine, host.registry, 60, 10);
+            bool finite = true;
+
+            for (int c = 0; c < out.getNumChannels() && finite; ++c)
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                    if (! std::isfinite (out.getSample (c, i))) { finite = false; break; }
+
+            expect (finite, "the engine produced non-finite output after a failed decode");
+        }
+
+        beginTest ("every sample parameter at an extreme still renders safely");
+        {
+            TestHost host;
+            host.registry.setFromUI (PID::sourceMode, 1.0f);
+            SampleSlot slot;
+            slot.publish (makeTone (330.0, 0.75));
+
+            SampleEngine engine;
+            EngineSpec spec; spec.sampleRate = kRate; spec.maxBlockSize = 256;
+            engine.prepare (spec);
+            engine.setSlot (&slot);
+
+            struct Extreme { PID pid; float value; };
+
+            const Extreme extremes[] = {
+                { PID::sampleStart, 1.0f }, { PID::sampleEnd, 0.0f },
+                { PID::sampleLoopStart, 1.0f }, { PID::sampleLoopEnd, 0.0f },
+                { PID::sampleCrossfade, 1.0f }, { PID::sampleTune, 24.0f },
+                { PID::sampleTune, -24.0f }, { PID::sampleGain, 24.0f },
+                { PID::sampleKeyTrack, 1.0f }, { PID::sampleLoop, 1.0f },
+                { PID::sampleReverse, 1.0f },
+            };
+
+            for (const auto& e : extremes)
+            {
+                host.registry.setFromUI (e.pid, e.value);
+                engine.reset();
+
+                const auto out = render (engine, host.registry, 96, 24);
+
+                for (int c = 0; c < out.getNumChannels(); ++c)
+                {
+                    for (int i = 0; i < out.getNumSamples(); ++i)
+                    {
+                        const float v = out.getSample (c, i);
+
+                        if (! std::isfinite (v) || std::abs (v) > 8.0f)
+                        {
+                            expect (false, juce::String (ParameterRegistry::idOf (e.pid))
+                                        + " at " + juce::String (e.value)
+                                        + " produced " + juce::String (v));
+                            return;
+                        }
+                    }
+                }
+            }
+
+            expect (true);
+        }
+    }
+};
+
+static SampleTests sampleTests;
+
 static MutationTests mutationTests;
 
 // ===========================================================================

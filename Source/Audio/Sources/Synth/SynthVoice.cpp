@@ -82,9 +82,11 @@ namespace nacar::synth
     //
     //    * prepare both factors and cross-fade between them.  Correct, but it
     //      runs both cores at once for the length of the fade, on every
-    //      sounding voice at the same instant.  This build is already at 137 %
-    //      of one core at 32 voices with 8x unison, so the fade would buy a
-    //      clean transition with a dropout.
+    //      sounding voice at the same instant.  At 32 voices with 8x unison
+    //      this container measures STUDIO at 65 % of realtime and ULTRA at
+    //      91 %; a fade that ran both would ask for about 157 % for the length
+    //      of it.  That buys a clean transition with a dropout, and on the
+    //      slower machine STATUS.md's 137 % came from it is worse.
     //    * fade the voice to silence, switch, fade back.  A hole in a held
     //      note, which is not obviously better than a thump.
     //    * change the factor only where the voice is already starting from

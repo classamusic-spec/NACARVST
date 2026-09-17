@@ -642,6 +642,66 @@ struct QualityTests : juce::UnitTest
         }
 
         // -------------------------------------------------------------------
+        beginTest ("ULTRA changes what aliases, not how loud it is");
+        {
+            // The failure this guards against is the one that would look like
+            // success.  If the 4x path had a different passband gain - a
+            // halfband that summed where it should have averaged, an
+            // interpolator missing its factor of two - then ULTRA would simply
+            // be louder, every patch would sound "better" for the wrong reason,
+            // and the presets nearest the ceiling would start clipping the
+            // moment anyone touched the control.  It is a level check, not a
+            // tone check: a quality tier may not revoice the instrument.
+            struct Case { const char* what; void (*patch) (TestHost&); int note; int notes; };
+
+            const Case cases[] = {
+                { "saw into a driven ladder", cleanPatch,    96, 1 },
+                { "a hard-knee fold",         coreOnlyPatch, 84, 1 },
+                { "the whole voice path",     richPatch,     45, 3 }
+            };
+
+            for (const auto& c : cases)
+            {
+                TestHost studioHost, ultraHost;
+                c.patch (studioHost);
+                c.patch (ultraHost);
+
+                const auto s = render (studioHost, 48000.0, kStudio, c.note, 2.0, c.notes);
+                const auto u = render (ultraHost,  48000.0, kUltra,  c.note, 2.0, c.notes);
+
+                double sSq = 0.0, uSq = 0.0;
+
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < s.audio.getNumSamples(); ++i)
+                    {
+                        const double a = s.audio.getReadPointer (ch)[i];
+                        const double b = u.audio.getReadPointer (ch)[i];
+                        sSq += a * a;
+                        uSq += b * b;
+                    }
+
+                const float rmsDb = juce::Decibels::gainToDecibels (
+                                        (float) std::sqrt (juce::jmax (1.0e-30, uSq / juce::jmax (1.0e-30, sSq))));
+                const float peakDb = juce::Decibels::gainToDecibels (u.peak, -144.0f)
+                                   - juce::Decibels::gainToDecibels (s.peak, -144.0f);
+
+                logMessage ("    " + juce::String (c.what) + ": ULTRA is "
+                            + juce::String (rmsDb, 3) + " dB RMS and "
+                            + juce::String (peakDb, 3) + " dB peak against STUDIO");
+
+                expect (std::abs (rmsDb) < 0.5f,
+                        juce::String (c.what) + ": ULTRA shifts the level by "
+                            + juce::String (rmsDb, 3) + " dB RMS, so the two tiers differ in "
+                              "loudness and not only in aliasing");
+
+                expect (std::abs (peakDb) < 1.0f,
+                        juce::String (c.what) + ": ULTRA shifts the peak by "
+                            + juce::String (peakDb, 3) + " dB, which is how a quality control "
+                              "starts clipping presets that were inside the ceiling");
+            }
+        }
+
+        // -------------------------------------------------------------------
         beginTest ("turning the knob under a sounding note changes nothing about it");
         {
             // The strongest form of "it does not click": a note that is already

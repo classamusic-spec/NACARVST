@@ -21,9 +21,9 @@ production-ready.
 | 8 | Synth quality gate: benchmarks | **29/29 pass; not accepted by ear** |
 | 9 | Memory: four generations | **Built and measured, not auditioned** |
 | 10 | Modulation: LFOs, Breath, the matrix | **Built, measured and live** |
-| 11 | Pulse | **Built; two of five destinations consumed** |
+| 11 | Pulse | **Built; all five destinations consumed, each on its own envelope** |
 | 12 | Retro / Crush / Filter FX | **Built and measured, not auditioned** |
-| 13 | Rewind | **Built; repeats rather than one-shots** |
+| 13 | Rewind | **Built; repeat or one-shot, `rewind_repeat`** |
 | 14 | Grain | **Built and measured, not auditioned** |
 | 15 | Space / Aura / Shadow / Patina | **Built and measured, not auditioned** |
 | 16 | Weight | **Built and measured, not auditioned** |
@@ -35,8 +35,8 @@ production-ready.
 | 22 | Print / generations | **Built and tested; not auditioned** |
 | 23 | Make instrument | **Built and tested; not auditioned** |
 | 24 | Internal sound-design tools | Benchmark renderer and stage attribution |
-| 25–27 | Golden presets, golden mutations, factory library | **Factory library: 300 presets, rendered and measured.** Golden presets and golden mutations not started |
-| 28–29 | Optimisation, full QA | Not started |
+| 25–27 | Golden presets, golden mutations, factory library | **Factory library: 300 presets, rendered and measured. Golden set: harness built and gating on drift, NEVER AUDITIONED** - see `Docs/GOLDEN.md` |
+| 28–29 | Optimisation, full QA | **Vectorised oscillator written, measured and NOT WIRED IN** (`Tools/pending/`). Full QA not started |
 
 ---
 
@@ -305,13 +305,65 @@ READMEs listed above. The ones that matter at instrument level:
 
 **DSP**
 
-- **32 voices at 8× unison exceeds realtime** — 137 % of one core through the
-  chain. SIMD in the oscillator inner loop is the obvious missing optimisation;
-  there is none anywhere in the build.
+- **32 voices at 8x unison exceeds realtime.** The 137 % figure in this document
+  was measured on a machine roughly 1.6x slower than the container these later
+  numbers come from, which reads 83.2 % for the same case. The two sets are not
+  comparable and both are quoted with their source from here on.
+
+  A vectorised unison oscillator has been written, measured and proven
+  bit-identical - 29 benchmark renders byte for byte, all 300 presets identical
+  in every measured column - and is worth 12-15 % on exactly that case. **It is
+  not wired in**: its call site is in `SynthVoice`, which the ULTRA work was
+  rewriting at the time, so it waits as a six-hunk patch in `Tools/pending/`.
+  Until that is applied the `UnisonOscillatorBank` is dead code, and the
+  decision is genuinely open - a second implementation of the oscillator has to
+  stay in step with the first forever, buys nothing at low unison, and does not
+  bring the over-budget case into realtime.
+
+  The profile says the next two things to look at are elsewhere anyway:
+  `SynthVoice::render`'s own body is 37 % of instructions and nobody has looked
+  at it, and `AnalogOscillator::shape` is not inlined into `process`.
 - **Memory adds up to 12.3 ms of latency at generation IV** and is not
   internally compensated. See *Not verified* above.
-- **ULTRA quality is accepted and stored but behaves as STUDIO.** 4×
-  oversampling is not implemented.
+- **ULTRA runs the nonlinear core at 4x against STUDIO's 2x**, and is worth a
+  measured 10.8 dB (44.1 kHz) to 12.7 dB (48 kHz) of inharmonic energy in the
+  core at MIDI 96. Three things about it are worth knowing before reaching for
+  it:
+
+  - **The benefit is mostly invisible on bright material.** Those figures are
+    measured through a SINE, so every bin off the series is the core's. Through
+    a saw at C7 the whole-instrument figure barely moves - -38.23 dB STUDIO
+    against -38.44 dB ULTRA - because the oscillator's own aliasing is an order
+    of magnitude above the core's and swamps it. ULTRA fixes the core; the
+    oscillator is the real ceiling.
+  - **It costs 40-68% more CPU.**
+  - **The quality tier is latched per voice at note-on.** A sounding note keeps
+    the rate it started at, which is why nothing clicks when the knob moves -
+    and why a held pad will not follow it.
+
+- **A COMB filter tuned below about 47 Hz is a different pitch under ULTRA.**
+  The comb's delay line is a fixed 4096 samples of whatever rate it runs at, so
+  its lowest reachable frequency is 23.5 Hz at 2x and 46.9 Hz at 4x in a 48 kHz
+  session; a request below that is clamped. `filter_cutoff` goes down to 20 Hz,
+  so the range 20-47 Hz genuinely changes tuning between the two tiers.
+
+  Inherited from the 2x core rather than introduced by ULTRA, and not fixed
+  here because every fix costs something a caller should choose: enlarging the
+  buffer would let STUDIO newly reach below 23.5 Hz and so would change what
+  STUDIO sounds like, which is the guarantee ULTRA was built around; sizing it
+  from a fixed lowest frequency instead needs about 19 MB per voice at the
+  highest supported session rate.
+
+- **ULTRA adds 16.5 samples of latency inside the voice** (344 us at 48 kHz),
+  and it is not reported to the host because the figure moves with a parameter.
+  The synth therefore sits that much behind the sample engine under ULTRA.
+
+- **ULTRA is slightly brighter above about 15 kHz**, not only cleaner: a sharper
+  converter is a flatter one. The 2x round trip costs -3.2 dB at 0.4 of the
+  rate and -6.6 dB at 0.45; ULTRA's costs -0.13 and -2.4. The roll-off is a
+  cheap converter's artefact rather than a voicing decision, so this is probably
+  the right direction - but the two tiers are not identical there and somebody
+  should confirm that by ear.
 - **The mod matrix is block-rate.** One value per parameter per block, so a
   routing that sweeps fast enough steps at buffer boundaries. The destinations
   where that would be audible — the synth's own LFO paths, Pulse's envelopes —
@@ -325,13 +377,20 @@ READMEs listed above. The ones that matter at instrument level:
   PM index - are now hard-wired as `pitch_env_amt` and `pm_env_amt` off
   envelope 2, so the gap is no longer audible in the library. Everything else
   a per-voice matrix would allow still is not reachable.
-- **Three of Pulse's five envelopes are generated and discarded.** VOLUME and
-  WIDTH are consumed by the output stage; FILTER, SPACE and MEMORY would each
-  have to be read by the engine that owns that behaviour, and none does yet.
+- ~~Three of Pulse's five envelopes are generated and discarded.~~ **Fixed.**
+  All five are consumed, and each destination now reads its OWN envelope rather
+  than the volume duck - which is the whole reason Pulse computes five from one
+  trigger. Measured, held above 0.25 after a single trigger: filter 0.67x
+  volume, memory 1.33x, space 1.68x, against a design table of 0.70, 1.30 and
+  1.60.
 - **Pulse's SIDECHAIN source has no input.** NÁCAR is an instrument with no side
   bus, so the transient detector behind it has never processed a sample.
   Selecting SIDECHAIN falls back to CLOCK.
-- **Rewind has no one-shot trigger.** `ParameterList.h` has no trigger
+- ~~Rewind has no one-shot trigger.~~ **Fixed** by `rewind_repeat`, which
+  defaults to true so no existing preset moved. The original note follows,
+  because it explains what the default still does:
+
+  **Rewind's repeat mode.** `ParameterList.h` has no trigger
   parameter, so `rewind_on` is treated as a *repeat enable*: the gesture
   re-fires on the musical grid when synced, every `rewind_length` seconds when
   not, and on a Pulse trigger. It is a defensible reading of §88 — the power

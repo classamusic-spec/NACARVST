@@ -1,0 +1,24 @@
+# NACAR golden fingerprints.
+# Regenerated with: NacarBench --golden --rewrite
+# A change here is a change to what the instrument SOUNDS LIKE.
+# Nothing may update this file without somebody having listened.
+# name	peakDb	rmsDb	centroidHz	low%	high%	monoDb	samples
+Niebla en la Ciudad	-7.76	-20.33	200.1	74.95	0.04	-1.35	336000
+Niebla en la Ciudad / MEMORY 11	-16.80	-27.75	188.6	82.46	0.16	-1.13	264000
+Cassette Rhodes	-6.54	-18.03	261.3	40.02	0.01	-0.26	216000
+Cassette Rhodes / BROKEN 23	-14.80	-26.72	300.4	13.78	0.07	-0.15	264000
+Long Hammer	-11.28	-24.82	39.4	99.94	0.00	-0.00	120000
+Tunnel Reese	-5.96	-18.22	49.4	97.28	0.01	-0.00	192000
+Foundation	-5.71	-15.79	36.7	99.97	0.00	-0.00	192000
+Iron Temple	-12.71	-22.67	206.6	61.71	0.01	-1.33	192000
+Iron Temple / GHOST 47	-16.27	-25.75	208.8	42.64	0.00	-1.14	832973
+Crystal Vespers	-18.25	-33.48	2250.2	0.00	4.49	-1.36	144000
+Ghost Arpeggio	-3.95	-19.55	307.7	32.10	0.05	-1.58	384000
+Ghost Arpeggio / RHYTHMIC 59	-10.13	-27.35	331.1	21.93	0.14	-1.65	264000
+Tape Dust	-15.19	-26.23	113.7	94.70	0.25	-0.05	336000
+Tape Dust / DISTANT 71	-12.12	-28.22	238.8	20.75	0.00	-4.50	473279
+Waiting Room	-13.38	-24.83	208.0	73.40	0.00	-0.43	432000
+Waiting Room / CLOUD 83	-23.24	-39.81	343.7	14.35	0.03	-1.95	832973
+Glass Hat	-10.45	-31.83	6114.4	0.00	86.11	-0.19	57600
+Salt Water Piano	-5.81	-21.02	272.7	45.04	0.00	-0.06	240000
+Salt Water Piano / DARK 97	-9.11	-23.68	197.5	33.90	0.00	-0.36	264000

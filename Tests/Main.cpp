@@ -22,6 +22,8 @@
 #include "../Source/Audio/Sources/Synth/Halfband.h"
 #include "../Source/Audio/NacarEngine.h"
 #include "../Source/Audio/Modulation/ModulationEngine.h"
+#include "../Source/Presets/FactoryPresets.h"
+#include "../Source/Presets/PresetManager.h"
 
 using namespace nacar;
 
@@ -5215,6 +5217,255 @@ struct IntegrationTests : juce::UnitTest
         }
     }
 };
+
+
+// ===========================================================================
+//  PRESETS
+//
+//  The factory library is data, and data written by many hands at once drifts:
+//  a category word that is not in the browser's vocabulary, a value outside
+//  its parameter's range, a routing that names a source reading zero in the
+//  global matrix.  None of those fail to compile and all of them are defects -
+//  a preset whose value is clamped on apply is not the patch it is written as,
+//  and a routing that does nothing is a dead control, which the operating
+//  contract forbids.
+//
+//  NacarBench --presets checks this too, and also renders every preset, which
+//  is the part this cannot do.  The checks are here as well because the bench
+//  is a tool somebody has to remember to run and this is a gate that runs on
+//  every build.
+// ===========================================================================
+class PresetTests : public juce::UnitTest
+{
+public:
+    PresetTests() : juce::UnitTest ("Presets", "nacar") {}
+
+    void runTest() override
+    {
+        const auto& library = presets::factoryLibrary();
+
+        const auto categories = juce::StringArray::fromTokens (
+            "KEYS PADS PLUCKS BELLS LEADS BASS SUB VOCAL-LIKE TEXTURE "
+            "ATMOSPHERE DRUMS PERCUSSION SEQUENCES", " ", "");
+
+        const auto moods = juce::StringArray::fromTokens (
+            "DARK INTIMATE BROKEN NOSTALGIC AIRY AGGRESSIVE ROMANTIC COLD WARM "
+            "CINEMATIC DIRTY DREAMY HAUNTED LUSH MINIMAL MYSTERIOUS", " ", "");
+
+        beginTest ("the library is not empty and every name in it is unique");
+        {
+            expect (! library.empty(), "the factory library is empty");
+
+            juce::StringArray seen;
+
+            for (const auto& preset : library)
+            {
+                expect (! seen.contains (preset.name),
+                        "two presets are called \"" + preset.name + "\"");
+                seen.add (preset.name);
+            }
+
+            logMessage ("    library: " + juce::String ((int) library.size()) + " presets");
+        }
+
+        beginTest ("every preset uses the browser's own category and mood words");
+        {
+            // A word outside these lists is a preset the browser cannot filter
+            // to, so it is a preset the user cannot find.
+            for (const auto& preset : library)
+            {
+                expect (categories.contains (preset.category),
+                        preset.name + ": category \"" + preset.category + "\" is not one of the thirteen");
+                expect (moods.contains (preset.mood),
+                        preset.name + ": mood \"" + preset.mood + "\" is not one of the sixteen");
+            }
+
+            // Every word has to carry something, or the browser shows a filter
+            // that returns nothing.
+            for (const auto& word : categories)
+            {
+                int n = 0;
+                for (const auto& preset : library)
+                    n += preset.category == word ? 1 : 0;
+
+                expect (n > 0, "no preset is in category " + word);
+            }
+
+            for (const auto& word : moods)
+            {
+                int n = 0;
+                for (const auto& preset : library)
+                    n += preset.mood == word ? 1 : 0;
+
+                expect (n > 0, "no preset carries the mood " + word);
+            }
+        }
+
+        beginTest ("every preset says what it is: tags, a blurb, and enough decisions to be one");
+        {
+            for (const auto& preset : library)
+            {
+                expect (preset.tags.size() >= 2 && preset.tags.size() <= 4,
+                        preset.name + " has " + juce::String (preset.tags.size())
+                            + " tags; the brief asks for two to four");
+
+                expect (preset.blurb.isNotEmpty(), preset.name + " has no one-sentence identity");
+
+                // A preset that sets almost nothing is the parameter list's
+                // defaults under a new name.  Eight is not a quality bar, it
+                // is a floor under "this is a patch".
+                expect (preset.values.size() >= 8,
+                        preset.name + " sets only " + juce::String ((int) preset.values.size())
+                            + " parameters, which is the defaults under a new name");
+            }
+        }
+
+        beginTest ("no preset value is outside the range its parameter declares");
+        {
+            // This is the one that matters most: a value outside the range is
+            // silently clamped when the preset is applied, so the patch that
+            // loads is not the patch that was written, and nothing says so.
+            for (const auto& preset : library)
+            {
+                for (const auto& value : preset.values)
+                {
+                    const auto& d = ParameterRegistry::definition (value.pid);
+
+                    if (d.kind == ParamKind::floatValue)
+                    {
+                        expect (value.value >= d.minValue - 1.0e-4f && value.value <= d.maxValue + 1.0e-4f,
+                                preset.name + ": " + juce::String (d.id) + " = "
+                                    + juce::String (value.value) + " is outside ["
+                                    + juce::String (d.minValue) + ", " + juce::String (d.maxValue) + "]");
+                    }
+                    else if (d.kind == ParamKind::choice)
+                    {
+                        const int numChoices = ParameterRegistry::choicesOf (value.pid).size();
+
+                        expect (value.value >= -0.4f && value.value <= (float) numChoices - 0.6f,
+                                preset.name + ": " + juce::String (d.id) + " = "
+                                    + juce::String (value.value) + " is not one of its "
+                                    + juce::String (numChoices) + " choices");
+                    }
+                    else
+                    {
+                        // A BOOL carries no choice list, so it is checked
+                        // against the only two values it has rather than
+                        // against an empty one - which is what this test
+                        // originally did, and it flagged every switched-on
+                        // module in the library.
+                        expect (value.value > -0.4f && value.value < 1.4f,
+                                preset.name + ": " + juce::String (d.id) + " = "
+                                    + juce::String (value.value) + " is not off or on");
+                    }
+                }
+            }
+        }
+
+        beginTest ("no routing is a dead control");
+        {
+            // ENV 1, ENV 2, VELOCITY and KEY TRACK are per-voice and read zero
+            // in the global matrix.  A preset routing one of them would ship a
+            // control that visibly does nothing.
+            const auto dead = juce::StringArray::fromTokens ("NONE|ENV 1|ENV 2|VELOCITY|KEY TRACK", "|", "");
+
+            for (const auto& preset : library)
+            {
+                expect (preset.mods.size() <= 8,
+                        preset.name + " has " + juce::String ((int) preset.mods.size())
+                            + " routings; the matrix holds eight");
+
+                for (const auto& m : preset.mods)
+                {
+                    const juce::String source (m.source);
+
+                    expect (! dead.contains (source),
+                            preset.name + " routes " + source + ", which reads zero in the global matrix");
+
+                    expect (modSourceFromName (source) != ModSource::none,
+                            preset.name + " routes an unknown source \"" + source + "\"");
+
+                    expect (m.depth >= -1.0f && m.depth <= 1.0f,
+                            preset.name + ": routing depth " + juce::String (m.depth) + " is outside -1..1");
+                }
+            }
+        }
+
+        beginTest ("every chain order is a permutation of the six slots");
+        {
+            for (const auto& preset : library)
+            {
+                if (preset.fxOrder.isEmpty())       // the default, which is fine
+                    continue;
+
+                const auto named = juce::StringArray::fromTokens (preset.fxOrder, ",", "");
+
+                expect (named.size() == numFxSlots,
+                        preset.name + ": chain order names " + juce::String (named.size())
+                            + " slots, not " + juce::String (numFxSlots));
+
+                for (int slot = 0; slot < numFxSlots; ++slot)
+                {
+                    const juce::String canonical (fxSlotName ((FxSlot) slot));
+
+                    expect (named.contains (canonical),
+                            preset.name + ": chain order leaves " + canonical + " out, so it would never run");
+                }
+            }
+        }
+
+        beginTest ("every audition hint is something the renderer can actually play");
+        {
+            // The audition is only a render hint, but a nonsense one makes the
+            // bench measure the wrong thing and report a healthy preset as
+            // broken.
+            for (const auto& preset : library)
+            {
+                const auto& a = preset.audition;
+
+                expect (a.midiNote >= 0 && a.midiNote <= 127,
+                        preset.name + ": audition note " + juce::String (a.midiNote) + " is not a MIDI note");
+                expect (a.chordNotes >= 1 && a.chordNotes <= 8,
+                        preset.name + ": audition chord of " + juce::String (a.chordNotes) + " notes");
+                expect (a.velocity > 0.0f && a.velocity <= 1.0f,
+                        preset.name + ": audition velocity " + juce::String (a.velocity) + " is outside 0..1");
+                expect (a.seconds > 0.25 && a.seconds <= 30.0,
+                        preset.name + ": audition length " + juce::String (a.seconds) + " s");
+            }
+        }
+
+        beginTest ("a preset applies as written, through the same path a user preset takes");
+        {
+            // PresetManager resets to the parameter list's defaults and then
+            // applies, so what this proves is the property the library depends
+            // on: what a preset does not say is the default, and what it does
+            // say survives.
+            TestHost host;
+
+            for (const auto& preset : library)
+            {
+                const auto payload = PresetManager::payloadOf (preset);
+                PresetManager::applyParameters (host.registry, payload);
+
+                for (const auto& value : preset.values)
+                {
+                    const auto& d = ParameterRegistry::definition (value.pid);
+                    const float applied = host.registry.userValue (value.pid);
+
+                    const float tolerance = d.kind == ParamKind::floatValue
+                                          ? juce::jmax (1.0e-3f, std::abs (value.value) * 1.0e-3f)
+                                          : 0.01f;
+
+                    expect (std::abs (applied - value.value) <= tolerance,
+                            preset.name + ": " + juce::String (d.id) + " was written as "
+                                + juce::String (value.value) + " and applies as " + juce::String (applied));
+                }
+            }
+        }
+    }
+};
+
+static PresetTests presetTests;
 
 static IntegrationTests integrationTests;
 

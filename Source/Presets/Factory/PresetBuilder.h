@@ -176,14 +176,28 @@ namespace nacar::presets::detail
     {
         FactoryPreset p;
 
+        /** Everything a preset says about itself is decoded as UTF-8, not as
+            ASCII.
+
+            This matters and it is not obvious: juce::String's const char*
+            constructor is documented as taking ASCII and builds through
+            CharPointer_ASCII, so a source literal like "Bongo\u0301 de Palma"
+            written with a real accent arrives as one juce::String character
+            per UTF-8 BYTE - the name renders as mojibake in the browser and
+            the constructor asserts in a debug build.  factoryAuthor() already
+            spells NACAR's own name through fromUTF8 for exactly this reason.
+
+            Decoding here rather than at every call site means a preset writer
+            can type Spanish the way Spanish is spelled, which for this library
+            is the difference between "Guiro Rayado" and "Gu\u0308iro Rayado". */
         Build (const char* name, const char* category, const char* mood,
                const char* tags, const char* blurb)
         {
-            p.name     = name;
-            p.category = category;
-            p.mood     = mood;
-            p.blurb    = blurb;
-            p.tags     = juce::StringArray::fromTokens (juce::String (tags), ",", "");
+            p.name     = juce::String::fromUTF8 (name);
+            p.category = juce::String::fromUTF8 (category);
+            p.mood     = juce::String::fromUTF8 (mood);
+            p.blurb    = juce::String::fromUTF8 (blurb);
+            p.tags     = juce::StringArray::fromTokens (juce::String::fromUTF8 (tags), ",", "");
             p.tags.trim();
             p.tags.removeEmptyStrings();
         }

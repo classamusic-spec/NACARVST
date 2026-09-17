@@ -5301,6 +5301,56 @@ public:
             }
         }
 
+        beginTest ("every name and blurb decoded as text rather than as bytes");
+        {
+            // juce::String's const char* constructor takes ASCII, not UTF-8,
+            // so an accented source literal arrives as one character per BYTE:
+            // "Bongo" with an acute o arrives as two Latin-1 characters instead
+            // of one, and the constructor asserts in a debug build. Build
+            // decodes through fromUTF8 to prevent that; this proves it happened.
+            //
+            // The test works because mojibake and Spanish do not overlap: a
+            // mis-decoded UTF-8 sequence produces characters from the Latin-1
+            // supplement that no Spanish word contains, while everything the
+            // library legitimately spells is ASCII plus a short list of
+            // accented letters.
+            const juce::String allowedAccents (juce::CharPointer_UTF8 (
+                "\xc3\x81\xc3\x89\xc3\x8d\xc3\x93\xc3\x9a\xc3\x9c\xc3\x91"
+                "\xc3\xa1\xc3\xa9\xc3\xad\xc3\xb3\xc3\xba\xc3\xbc\xc3\xb1"));
+
+            auto readsAsText = [&allowedAccents] (const juce::String& s)
+            {
+                for (auto c = s.getCharPointer(); ! c.isEmpty(); ++c)
+                {
+                    const auto ch = *c;
+
+                    if (ch >= 32 && ch < 127)
+                        continue;
+
+                    if (allowedAccents.containsChar (ch))
+                        continue;
+
+                    return false;
+                }
+
+                return true;
+            };
+
+            for (const auto& preset : library)
+            {
+                expect (readsAsText (preset.name),
+                        "the name \"" + preset.name + "\" contains a character that is neither "
+                        "ASCII nor a Spanish accent - it was decoded as bytes, not as text");
+
+                expect (readsAsText (preset.blurb),
+                        preset.name + "'s blurb contains a character that is neither ASCII nor a "
+                        "Spanish accent - it was decoded as bytes, not as text");
+
+                for (const auto& tag : preset.tags)
+                    expect (readsAsText (tag), preset.name + " has a tag decoded as bytes, not as text");
+            }
+        }
+
         beginTest ("each category occupies one contiguous run, so no preset is in the wrong file");
         {
             // factoryLibrary() calls one builder per category, in order, and
@@ -5501,20 +5551,19 @@ public:
             TestHost host;
             StateManager state (host.apvts);
 
-            const juce::String name (StateManager::defaultPresetName);
+            const juce::String wanted (StateManager::defaultPresetName);
 
-            const auto& library = presets::factoryLibrary();
             const auto match = std::find_if (library.begin(), library.end(),
-                                             [&name] (const presets::FactoryPreset& p)
-                                             { return p.name == name; });
+                                             [&wanted] (const presets::FactoryPreset& p)
+                                             { return p.name == wanted; });
 
             expect (match != library.end(),
-                    "the default session names \"" + name + "\", which is not in the factory library");
+                    "the default session names \"" + wanted + "\", which is not in the factory library");
 
             if (match == library.end())
                 return;
 
-            expect (PresetManager::applyFactoryPresetByName (host.registry, state, name),
+            expect (PresetManager::applyFactoryPresetByName (host.registry, state, wanted),
                     "applying the default preset by name failed");
 
             // Its parameters are in force.

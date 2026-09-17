@@ -14,9 +14,9 @@ namespace nacar
         // The sample SOURCE reads whatever the loader has published.  Pointed
         // at the slot here, once: nothing below this line changes it, and the
         // slot is declared before the engine so it outlives it.
-        engine.setSampleSlot (&sampleSlot);
+        engine.setSampleSlot (&pipeline.slot());
 
-        sampleLoader.onFinished = [this] (const SampleLoader::Result& result)
+        pipeline.onLoadFinished = [this] (const SampleLoader::Result& result)
         {
             // What the decoder measured, written back where the interface
             // reads it.  On failure these are cleared rather than left at the
@@ -29,6 +29,38 @@ namespace nacar
             sample.setProperty (ids::sampleChannels,      result.ok ? result.numChannels : 0, nullptr);
         };
 
+        pipeline.onAnalysisChanged = [this] (const AnalysisResult& result)
+        {
+            // Including the cleared one that a new file produces: the branch
+            // has to stop describing the previous sample the moment the
+            // previous sample stops being what is loaded.
+            auto branch = stateManager.group (ids::ANALYSIS);
+            result.writeTo (branch);
+
+            if (onAnalysisFinished != nullptr)
+                onAnalysisFinished();
+        };
+
+        pipeline.onMutationFinished = [this] (const mutation::Result& result)
+        {
+            // A successful mutation is already in the slot by now, so the
+            // SAMPLE branch is describing the wrong audio until this runs.
+            // The file path is deliberately left alone: what is playing is no
+            // longer that file, and claiming otherwise in a saved session
+            // would restore the original and call it the mutation.
+            if (result.ok && result.audio != nullptr)
+            {
+                auto sample = stateManager.group (ids::SAMPLE);
+
+                sample.setProperty (ids::sampleRate,          result.audio->sourceRate, nullptr);
+                sample.setProperty (ids::sampleLengthSamples, result.audio->audio.getNumSamples(), nullptr);
+                sample.setProperty (ids::sampleChannels,      result.audio->audio.getNumChannels(), nullptr);
+            }
+
+            if (onMutationFinished != nullptr)
+                onMutationFinished (result);
+        };
+
         // The chain order lives in the session tree and can change from the
         // editor, from a preset load or from a host restore, so the processor
         // watches the whole session rather than one child: StateManager's
@@ -37,12 +69,23 @@ namespace nacar
         stateManager.session().addListener (this);
         publishFxOrder();
         publishModMatrix();
+
+        // 20 Hz is fast enough that a decode feels immediate and slow enough
+        // that it costs nothing.  See timerCallback(): this is the processor's
+        // clock, not the editor's, on purpose.
+        startTimerHz (20);
     }
 
     NacarProcessor::~NacarProcessor()
     {
+        stopTimer();
         cancelPendingUpdate();
         stateManager.session().removeListener (this);
+    }
+
+    void NacarProcessor::timerCallback()
+    {
+        pipeline.poll();
     }
 
     void NacarProcessor::handleAsyncUpdate()
@@ -84,15 +127,28 @@ namespace nacar
     // -----------------------------------------------------------------------
     void NacarProcessor::startSampleLoad (const juce::File& file)
     {
-        // An empty path is how the interface says "there is no sample", and it
-        // has to reach the audio thread as promptly as a real one does.
-        if (file.getFullPathName().isEmpty())
-        {
-            sampleLoader.clear();
-            return;
-        }
+        // An empty path is how the interface says "there is no sample", and
+        // the pipeline treats it as one: it empties the slot and clears the
+        // analysis rather than leaving either describing a sound that has
+        // gone.
+        pipeline.load (file);
+    }
 
-        sampleLoader.loadAsync (file);
+    // -----------------------------------------------------------------------
+    //  Mutation
+    // -----------------------------------------------------------------------
+    bool NacarProcessor::requestMutation (const mutation::Recipe& recipe, juce::String& failure)
+    {
+        // The harmony context is assembled here because it is the only place
+        // that has both halves of it: what the analyser found, and what the
+        // user asked for on the SCALE control.  Choice 0 is AUTO, so a forced
+        // scale is the index minus one and AUTO arrives as -1 - which
+        // Context::from reads as "use the detected one, if there is one".
+        const auto context = harmony::Context::from (pipeline.analysis(),
+                                                     recipe.harmonyMode,
+                                                     registry.choice (PID::scaleType) - 1);
+
+        return pipeline.mutate (recipe, context, failure);
     }
 
     void NacarProcessor::valueTreePropertyChanged (juce::ValueTree& tree,

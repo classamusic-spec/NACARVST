@@ -849,9 +849,38 @@ namespace nacar::ui
 
         const bool decoded = (rate > 0.0 && len > 0.0);
 
-        // Only the decoder may claim SourceKind::sample, and it does that by
-        // calling WaveformView::setThumbnailSource() with real audio.  Nothing
-        // here ever sets it.
+        // The decoded audio, handed over once per sample.
+        //
+        // Only real audio may claim SourceKind::sample, and this is where it
+        // arrives: from the slot the audio thread plays out of, through the
+        // overview the decoder already built. A file whose decode failed or has
+        // not finished never gets here, so the field can never draw a waveform
+        // for audio the instrument does not hold.
+        {
+            auto loaded = processor.getSampleSlot().acquire();
+            const auto* raw = loaded.get();
+
+            if (raw != shownSample)
+            {
+                shownSample = raw;
+
+                if (raw != nullptr && ! raw->isEmpty())
+                {
+                    waveField.setPeakSource (raw->peaks);
+                    overviewView.setPeakSource (raw->peaks);
+
+                    waveField.setSourceLabel (raw->displayName.isNotEmpty()
+                                                ? raw->displayName
+                                                : juce::String ("SAMPLE"));
+                }
+                else
+                {
+                    waveField.clearSource();
+                    overviewView.clearSource();
+                }
+            }
+        }
+
         if (waveField.getSourceKind() != WaveformView::SourceKind::sample)
         {
             const auto kind = (file.isNotEmpty() && ! decoded)

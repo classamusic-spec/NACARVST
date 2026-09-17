@@ -132,6 +132,12 @@ namespace nacar::ui
         void timerCallback() override;
 
         void refreshFromState();
+
+        /** Which decoded buffer the field is currently drawing, so that the
+            reduction happens once per sample rather than once per frame. It is
+            compared, never dereferenced - by the time it differs, the buffer it
+            points at may already have been collected. */
+        const SampleBuffer* shownSample = nullptr;
         void refreshHeaderText();
         void syncFromParameters();
         void syncOverviewWindow();

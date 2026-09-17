@@ -1,5 +1,8 @@
 #include "MutationPanel.h"
 
+#include "../../Mutation/MutationRecipe.h"
+#include "../../Harmony/Harmony.h"
+
 // ===========================================================================
 //  WHAT IS WIRED IN THIS FILE, AND WHAT IS NOT
 //
@@ -338,7 +341,7 @@ namespace nacar::ui
                                          "it needs the mutation engine from phase 21.");
         makeInstrumentButton.onClick = [this]
         {
-            setStatus ("MAKE INSTRUMENT" + dash() + "AWAITING MUTATION ENGINE (PHASE 21)");
+            setStatus ("MAKE INSTRUMENT" + dash() + "AWAITING THE INSTRUMENT BUILDER (PHASE 23)");
         };
         addAndMakeVisible (makeInstrumentButton);
 
@@ -377,8 +380,8 @@ namespace nacar::ui
         const int storedSeed = (int) mutationTree().getProperty (ids::currentSeed, 0);
 
         setStatus (storedSeed > 0
-                       ? "SEED " + juce::String (storedSeed) + sep() + "ENGINE PENDING (PHASE 21)"
-                       : juce::String ("NO MUTATION YET") + sep() + "ENGINE PENDING (PHASE 21)");
+                       ? "SEED " + juce::String (storedSeed) + sep() + "READY"
+                       : juce::String ("NO MUTATION YET") + sep() + "READY");
     }
 
     MutationPanel::~MutationPanel() = default;
@@ -592,9 +595,23 @@ namespace nacar::ui
 
         mutation.setProperty (ids::historyIndex, history.getNumChildren() - 1, nullptr);
 
-        // >>> Phase 21 hooks in here: the engine is handed `recipe` and writes
-        // >>> ids::recipePayload / ids::recipeScore back into it.  Everything
-        // >>> above this line is final.
+        // -- the engine --------------------------------------------------------
+        //
+        // The recipe above is what gets stored; this is the same thing in the
+        // engine's own type. It is built from the registry so that the seven
+        // preserve locks come from the switches the user can see, and then the
+        // four decisions this panel just made are written over the top - the
+        // seed in particular, which may be a locked one rather than a fresh
+        // roll.
+        auto engineRecipe = mutation::Recipe::fromParameters (processor.getParameters());
+
+        engineRecipe.seed        = (juce::uint32) seed;
+        engineRecipe.intent      = (mutation::Intent) intent;
+        engineRecipe.harmonyMode = (harmony::Mode) harmony;
+        engineRecipe.distance    = (mutation::Distance) distance;
+
+        juce::String failure;
+        const bool started = processor.requestMutation (engineRecipe, failure);
 
         // -- feedback ---------------------------------------------------------
         juce::String s;
@@ -606,7 +623,7 @@ namespace nacar::ui
         s << sep() << "INTENT " << choiceName (PID::mutationIntent, intent)
           << sep() << choiceName (PID::harmonyMode, harmony)
           << "/"   << choiceName (PID::distanceMode, distance)
-          << sep() << "ENGINE PENDING (PHASE 21)";
+          << sep() << (started ? juce::String ("RENDERING") : failure);
 
         setStatus (s);
 

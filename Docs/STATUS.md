@@ -1,7 +1,8 @@
 # NÁCAR — what is finished and what is not
 
-*Updated at the end of the Phase 9–17 build: Memory, modulation, the FX chain,
-the atmosphere modules, Weight, and the routing that joins them.*
+*Updated at the end of the Phase 18–21 build: sample decoding and playback,
+analysis, the harmony engine, and the mutation engine — and the wiring that
+connects all four to the interface.*
 
 This document exists because the build specification forbids claiming a
 subsystem works when it does not. Read it before assuming anything below is
@@ -27,10 +28,10 @@ production-ready.
 | 15 | Space / Aura / Shadow / Patina | **Built and measured, not auditioned** |
 | 16 | Weight | **Built and measured, not auditioned** |
 | 17 | FX routing and locking | **Complete: order, bypass and DSP all real** |
-| 18 | Sample import and waveform | **UI complete, decode not started** |
-| 19 | Audio analysis | Not started |
-| 20 | Harmony engine | Not started |
-| 21 | Mutation engine | **State complete, engine not started** |
+| 18 | Sample import and waveform | **Built, tested and wired** |
+| 19 | Audio analysis | **Built, tested and wired** |
+| 20 | Harmony engine | **Built, tested and wired** |
+| 21 | Mutation engine | **Built, tested and wired; not auditioned** |
 | 22 | Print / generations | Not started |
 | 23 | Make instrument | Not started |
 | 24 | Internal sound-design tools | Benchmark renderer and stage attribution |
@@ -126,29 +127,48 @@ with more of the same — which is the whole point of the control.
 
 ---
 
+## The second half of the instrument
+
+**Dropping an audio file now decodes it.** The decode runs on a background
+thread, builds the waveform overview as it goes, and publishes into the slot
+the audio thread plays from. The viewport draws that overview — real audio, not
+a level trace — and still refuses to draw anything for a file whose decode
+failed or has not finished.
+
+**A decoded sample is analysed.** Chroma into key detection, spectral-flux
+onsets, tempo from the onset envelope, level, spectrum and character, written
+into the session's ANALYSIS branch. Every estimate carries a confidence, and
+the tests assert the ones that must be *zero*: white noise has no key and no
+tempo, a one-shot has no tempo at all.
+
+**The harmony engine constrains pitch musically.** Twelve roots by nine scales
+against Temperley's profiles, and the SAFE / COLOR / FREE control. Two things
+it will not do: invent a key when none was detected, and choose a mode when the
+root is confident but the mode is a coin flip — in that case it permits both
+thirds rather than picking one.
+
+**MUTATE renders.** A recipe — seed, intent, harmony, distance, seven preserve
+locks — goes to the mutation engine on a background thread, and the result is
+published into the same slot the sample engine plays from, so the thing you
+just made is the thing you are now playing. The same recipe against the same
+source is bit-identical, which is what makes AGAIN reproducible.
+
+With no sample loaded, MUTATE says `NOTHING TO MUTATE · LOAD A SAMPLE FIRST`
+and does nothing. Rendering the synth's own output into a buffer so that it can
+be mutated is PRINT, which is Phase 22 and does not exist.
+
+---
+
 ## What is UI and state only
 
-Three things, and they are now the exceptions rather than the rule:
-
-- `Source/Analysis/` — every analysis field in the session tree is still
-  default. Nothing measures a sample.
-- `Source/Mutation/` — recipes are generated and stored, nothing renders them.
-  PRINT and MAKE INSTRUMENT say plainly in the interface that they are waiting
-  on that engine rather than pretending to work.
-- The **sequencer** (SEQ page) persists four lanes of sixteen steps with values,
-  gates, lengths and targets. Nothing advances them against the host clock. Its
-  PREVIEW playhead is an editing aid driven by the UI timer and is labelled as
-  such on the page.
-
-Dropping an audio file records its path in the session tree. It does **not**
-decode, analyse or play it — asynchronous decoding is Phase 18 and analysis is
-Phase 19. The waveform view shows the instrument's own recent output level
-instead, and labels it as such. No fake waveform is drawn for a file that has
-not been read.
-
-The preset browser's search, filters and list are wired against an empty
-library and show an empty state. No placeholder preset names were invented to
-make it look populated.
+- The **sequencer** (SEQ page) persists four lanes of sixteen steps with
+  values, gates, lengths and targets. Nothing advances them against the host
+  clock. Its PREVIEW playhead is an editing aid driven by the UI timer and is
+  labelled as such on the page.
+- **PRINT** and **MAKE INSTRUMENT** are Phases 22 and 23. Both say so in the
+  interface rather than pretending to work.
+- Nothing in the interface **saves** a preset. `PresetManager::saveUserPreset`
+  works and is round-trip verified; no button calls it.
 
 ---
 

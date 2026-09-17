@@ -452,7 +452,7 @@ struct SynthEngineTests : juce::UnitTest
                 expect (r.allFinite, "non-finite output at block size " + juce::String (blockSize));
                 expect (r.anyNonZero, "silence at block size " + juce::String (blockSize));
 
-                if (reference == 0.0f)
+                if (! (reference > 0.0f))
                     reference = r.rms;
                 else
                     expect (std::abs (r.rms - reference) < reference * 0.25f + 1.0e-4f,
@@ -4702,7 +4702,7 @@ struct SampleTests : juce::UnitTest
             for (int c = 0; c < out.getNumChannels(); ++c)
                 peak = juce::jmax (peak, out.getMagnitude (c, 0, out.getNumSamples()));
 
-            expect (peak == 0.0f,
+            expect (! (peak > 0.0f),
                     "an engine with no sample produced " + juce::String (peak)
                         + " - it must be silent, not a placeholder");
         }
@@ -4980,6 +4980,243 @@ struct SampleTests : juce::UnitTest
         }
     }
 };
+
+#include "../Source/Audio/Sources/Sample/SourcePipeline.h"
+
+// ===========================================================================
+//  INTEGRATION  -  phases 18 to 21, joined up
+//
+//  The four engines each have their own suite and each passes. This is the
+//  different question: does the INSTRUMENT work? A file arrives, it decodes, it
+//  is analysed, a mutation is rendered from it and becomes the thing being
+//  played. Every step is a hand-off between two subsystems written separately,
+//  and a hand-off is exactly what unit tests do not cover.
+// ===========================================================================
+struct IntegrationTests : juce::UnitTest
+{
+    IntegrationTests() : juce::UnitTest ("Integration", "nacar") {}
+
+    /** Writes a real WAV to a real path, because the loader's job is to decode
+        a file and handing it a buffer would test something else. */
+    static juce::File writeTestWav (double rate, double seconds)
+    {
+        auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                        .getChildFile ("nacar-integration-" + juce::String (juce::Random::getSystemRandom().nextInt())
+                                       + ".wav");
+
+        const int n = (int) (rate * seconds);
+        juce::AudioBuffer<float> audio (2, n);
+
+        // A minor triad, so the analyser has a key to find and the mutation
+        // engine has something harmonic to work with.
+        const double hz[3] = { 220.0, 261.63, 329.63 };
+
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < n; ++i)
+            {
+                double v = 0.0;
+
+                for (double f : hz)
+                    v += 0.22 * std::sin (2.0 * juce::MathConstants<double>::pi * f * (double) i / rate);
+
+                audio.setSample (c, i, (float) v);
+            }
+
+        juce::WavAudioFormat format;
+
+        if (auto stream = std::unique_ptr<juce::FileOutputStream> (file.createOutputStream()))
+            if (auto* writer = format.createWriterFor (stream.get(), rate, 2, 24, {}, 0))
+            {
+                stream.release();
+                writer->writeFromAudioSampleBuffer (audio, 0, n);
+                delete writer;
+            }
+
+        return file;
+    }
+
+    /** Drives the loader and the processor's drain the way the editor's timer
+        does, until `done` or the deadline. */
+    template <typename Predicate>
+    static bool pump (SourcePipeline& pipeline, Predicate done, int millis = 20000)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) millis;
+
+        while (juce::Time::getMillisecondCounter() < deadline)
+        {
+            pipeline.poll();
+
+            if (done())
+                return true;
+
+            juce::Thread::sleep (10);
+        }
+
+        return false;
+    }
+
+    void runTest() override
+    {
+        beginTest ("a dropped file decodes, reaches the audio thread and is analysed");
+        {
+            auto file = writeTestWav (44100.0, 3.0);
+            expect (file.existsAsFile(), "could not write the test file");
+
+            SourcePipeline pipeline;
+            pipeline.load (file);
+
+            const bool decoded = pump (pipeline, [&pipeline]
+            {
+                auto s = pipeline.slot().acquire();
+                return s != nullptr && ! s->isEmpty();
+            });
+
+            expect (decoded, "the file never reached the slot the audio thread plays from");
+
+            if (decoded)
+            {
+                auto s = pipeline.slot().acquire();
+
+                expectWithinAbsoluteError (s->sourceRate, 44100.0, 1.0);
+                expect (s->lengthSamples() > 100000, "the decode was truncated");
+                expect (s->peaks.numBuckets > 0,
+                        "no waveform overview was built, so the viewport has nothing to draw");
+            }
+
+            // The analysis follows the decode without anything else asking.
+            const bool analysed = pump (pipeline, [&pipeline]
+            {
+                return pipeline.analysis().analysed;
+            });
+
+            expect (analysed, "a decode did not trigger an analysis");
+
+            const auto& a = pipeline.analysis();
+
+            logMessage ("    analysed: root " + juce::String (a.root)
+                            + " conf " + juce::String (a.rootConfidence, 3)
+                            + ", tempo " + juce::String (a.tempo, 1)
+                            + " conf " + juce::String (a.tempoConfidence, 3)
+                            + ", centroid " + juce::String (a.spectralCentroid, 0) + " Hz");
+
+            // It is a sustained triad: it has a key and it has no tempo. The
+            // second half of that matters as much as the first.
+            expect (a.root >= 0, "a sustained A minor triad produced no root at all");
+            expect (a.tempoConfidence < 0.5f,
+                    "a drone reported a confident tempo of " + juce::String (a.tempo, 1));
+
+            // And it round-trips through the session tree, which is what the
+            // interface reads and what a saved session carries.
+            juce::ValueTree branch (ids::ANALYSIS);
+            a.writeTo (branch);
+
+            const auto back = AnalysisResult::readFrom (branch);
+
+            expect (back.analysed, "the analysis did not survive the session tree");
+            expect (back.root == a.root, "the root changed on the way through the tree");
+
+            file.deleteFile();
+        }
+
+        beginTest ("MUTATE renders and becomes what the instrument plays");
+        {
+            auto file = writeTestWav (44100.0, 2.0);
+
+            SourcePipeline pipeline;
+            pipeline.load (file);
+
+            pump (pipeline, [&pipeline] { return pipeline.analysis().analysed; });
+
+            auto before = pipeline.slot().acquire();
+            expect (before != nullptr, "nothing was loaded to mutate");
+
+            const auto* sourcePointer = before.get();
+            const int sourceLength = before != nullptr ? before->lengthSamples() : 0;
+            before = nullptr;
+
+            mutation::Recipe recipe;
+            recipe.seed = 90210u;
+            recipe.intent = mutation::Intent::memory;
+            recipe.harmonyMode = harmony::Mode::safe;
+            recipe.distance = mutation::Distance::near_;
+
+            juce::String failure;
+            const auto context = harmony::Context::from (pipeline.analysis(),
+                                                         harmony::Mode::safe, -1);
+
+            const bool started = pipeline.mutate (recipe, context, failure);
+
+            expect (started, "the mutation would not start: " + failure);
+
+            bool finished = false;
+            pipeline.onMutationFinished = [&finished] (const mutation::Result&) { finished = true; };
+
+            expect (pump (pipeline, [&finished] { return finished; }, 30000),
+                    "the mutation never finished");
+
+            auto after = pipeline.slot().acquire();
+
+            expect (after != nullptr && ! after->isEmpty(),
+                    "the mutation produced nothing playable");
+
+            expect (after.get() != sourcePointer,
+                    "the slot still holds the source - the mutation did not become "
+                    "the thing being played");
+
+            if (after != nullptr)
+            {
+                logMessage ("    source " + juce::String (sourceLength)
+                                + " samples, mutation " + juce::String (after->lengthSamples()));
+
+                bool finite = true;
+                float peak = 0.0f;
+
+                for (int c = 0; c < after->numChannels() && finite; ++c)
+                    for (int i = 0; i < after->lengthSamples(); ++i)
+                    {
+                        const float v = after->audio.getSample (c, i);
+
+                        if (! std::isfinite (v)) { finite = false; break; }
+
+                        peak = juce::jmax (peak, std::abs (v));
+                    }
+
+                expect (finite, "the mutation contains non-finite samples");
+                expect (peak > 0.001f, "the mutation is silent");
+                expect (peak <= 1.0f, "the mutation clips at " + juce::String (peak, 3));
+
+                expect (after->peaks.numBuckets > 0,
+                        "the mutation has no overview, so the viewport cannot draw it");
+            }
+
+            file.deleteFile();
+        }
+
+        beginTest ("MUTATE with nothing loaded says so and changes nothing");
+        {
+            SourcePipeline pipeline;
+
+            mutation::Recipe recipe;
+            recipe.seed = 1u;
+
+            juce::String failure;
+            const auto context = harmony::Context::from (pipeline.analysis(),
+                                                         harmony::Mode::safe, -1);
+
+            const bool started = pipeline.mutate (recipe, context, failure);
+
+            expect (! started, "a mutation started with no source to mutate");
+            expect (failure.isNotEmpty(), "the refusal carried no message for the user");
+
+            logMessage ("    refusal reads: " + failure);
+
+            expect (pipeline.slot().acquire() == nullptr,
+                    "a refused mutation put something in the slot");
+        }
+    }
+};
+
+static IntegrationTests integrationTests;
 
 static SampleTests sampleTests;
 

@@ -7,7 +7,9 @@
 #include "ParameterRegistry.h"
 #include "StateManager.h"
 #include "../Audio/NacarEngine.h"
-#include "../Audio/Sources/Sample/SampleLoader.h"
+#include "../Audio/Sources/Sample/SourcePipeline.h"
+#include "../Analysis/AnalysisResult.h"
+#include "../Mutation/MutationRecipe.h"
 
 namespace nacar
 {
@@ -24,7 +26,8 @@ namespace nacar
     */
     class NacarProcessor : public juce::AudioProcessor,
                            private juce::ValueTree::Listener,
-                           private juce::AsyncUpdater
+                           private juce::AsyncUpdater,
+                           private juce::Timer
     {
     public:
         NacarProcessor();
@@ -76,8 +79,55 @@ namespace nacar
             publishes into it.  Message thread only, and read-only to everything
             but the loader: see `Source/Audio/Sources/Sample/SampleBuffer.h` for
             who is allowed to publish and who is allowed to free. */
-        SampleSlot& getSampleSlot() noexcept       { return sampleSlot; }
-        SampleLoader& getSampleLoader() noexcept   { return sampleLoader; }
+        SampleSlot& getSampleSlot() noexcept       { return pipeline.slot(); }
+        SampleLoader& getSampleLoader() noexcept   { return pipeline.loader(); }
+
+        /** The path a sound takes through the instrument: decode, analyse,
+            mutate, play. The processor owns it, drives its clock and writes
+            what it produces into the session tree; the logic itself lives in
+            SourcePipeline so that it can be tested, which it cannot be here. */
+        SourcePipeline& getPipeline() noexcept { return pipeline; }
+
+        // -------------------------------------------------------------------
+        //  ANALYSIS
+        //
+        //  Runs automatically when a decode succeeds, on a background thread,
+        //  and writes itself into the session's ANALYSIS branch when it lands.
+        //  Everything downstream - the harmony context, every mutation - reads
+        //  what this produced, so it must never be a guess presented as a fact:
+        //  see the note on confidence in AnalysisResult.h.
+        // -------------------------------------------------------------------
+
+        /** What the instrument currently knows about its sample. Message
+            thread. `analysed == false` until one has actually finished. */
+        const AnalysisResult& getAnalysis() const noexcept { return pipeline.analysis(); }
+
+        /** Called on the message thread when an analysis lands. */
+        std::function<void()> onAnalysisFinished;
+
+        // -------------------------------------------------------------------
+        //  MUTATION
+        //
+        //  MUTATE renders on a background thread and publishes the result into
+        //  the same slot the sample engine plays from, so a mutation becomes
+        //  the thing you are playing.
+        //
+        //  IT NEEDS A SOURCE. With no sample loaded there is nothing to mutate
+        //  and the request fails with a message saying so, rather than
+        //  inventing one. Rendering the synth's own output into a buffer first
+        //  is PRINT, which is phase 22 and does not exist.
+        // -------------------------------------------------------------------
+
+        /** Message thread. Starts a mutation from the recipe against whatever
+            sample is loaded. Returns false, with `failure` set, when it cannot
+            start at all - no sample, or one already running. */
+        bool requestMutation (const mutation::Recipe&, juce::String& failure);
+
+        bool isMutating() const noexcept { return pipeline.isMutating(); }
+
+        /** Called on the message thread when a mutation finishes, successfully
+            or not. The Result carries its own failure text. */
+        std::function<void (const mutation::Result&)> onMutationFinished;
 
         // -------------------------------------------------------------------
         //  Scope tap
@@ -135,14 +185,24 @@ namespace nacar
             on the message thread. */
         void handleAsyncUpdate() override;
 
+        /** Drives the pipeline's clock: advances a decode and applies whatever
+            background work has finished.
+
+            It is HERE and not in the editor, which is the whole point. A plugin
+            with no window open must still finish decoding the file it was given
+            and still finish the mutation it was asked for; an instrument whose
+            work stops when you close its interface is broken in a way that only
+            shows up in somebody's session. */
+        void timerCallback() override;
+
         juce::AudioProcessorValueTreeState apvts;
         ParameterRegistry registry;
         StateManager stateManager;
 
         // Declared before the engine so that they outlive it: the engine holds
         // a pointer to the slot, and destruction runs in reverse.
-        SampleSlot sampleSlot;
-        SampleLoader sampleLoader { sampleSlot };
+        SourcePipeline pipeline;
+
 
         NacarEngine engine;
 

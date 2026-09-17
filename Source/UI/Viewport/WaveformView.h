@@ -9,6 +9,7 @@
 #include "../Theme.h"
 #include "../Layout.h"
 #include "../../Plugin/PluginProcessor.h"
+#include "../../Audio/Sources/Sample/SampleBuffer.h"
 #include "SynthVisualizer.h"
 
 namespace nacar::ui
@@ -70,8 +71,18 @@ namespace nacar::ui
 
         // -- source ---------------------------------------------------------
 
-        /** Reduces real decoded audio into the source envelope. */
+        /** Reduces real decoded audio into the source envelope.
+
+            O(numSamples), and the loader will decode up to ten minutes - which
+            at 48 kHz stereo is nearly sixty million samples to walk on the
+            message thread. Prefer setPeakSource() below, which reads the
+            overview the decoder already built and is O(buckets). This overload
+            stays for callers that have audio but no peaks. */
         void setThumbnailSource (const float* const* channels, int numChannels, int numSamples);
+
+        /** The same, from the overview SampleBuffer built during its decode.
+            This is what SampleBuffer::Peaks exists for. */
+        void setPeakSource (const SampleBuffer::Peaks&);
 
         /** Drops the envelope and returns to the empty state. */
         void clearSource();

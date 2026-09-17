@@ -217,6 +217,51 @@ namespace nacar::ui
         repaint();
     }
 
+    void WaveformView::setPeakSource (const SampleBuffer::Peaks& peaks)
+    {
+        if (peaks.numBuckets <= 0 || peaks.numChannels <= 0
+            || (int) peaks.minimum.size() < peaks.numBuckets * peaks.numChannels)
+        {
+            clearSource();
+            return;
+        }
+
+        const int buckets = juce::jlimit (1, sourceBuckets, peaks.numBuckets);
+        sourceEnvelope.assign ((size_t) buckets, { 0.0f, 0.0f });
+
+        const double perBucket = (double) peaks.numBuckets / (double) buckets;
+
+        for (int b = 0; b < buckets; ++b)
+        {
+            const int i0 = juce::jlimit (0, peaks.numBuckets - 1,
+                                         (int) std::floor ((double) b * perBucket));
+            const int i1 = juce::jlimit (i0 + 1, peaks.numBuckets,
+                                         (int) std::ceil ((double) (b + 1) * perBucket));
+
+            float mn = 0.0f, mx = 0.0f;
+
+            // The channels are folded together, as the audio overload does:
+            // this view draws one envelope, and which channel a peak came from
+            // is not something it can show.
+            for (int i = i0; i < i1; ++i)
+            {
+                for (int c = 0; c < peaks.numChannels; ++c)
+                {
+                    const size_t k = (size_t) (i * peaks.numChannels + c);
+
+                    mn = juce::jmin (mn, peaks.minimum[k]);
+                    mx = juce::jmax (mx, peaks.maximum[k]);
+                }
+            }
+
+            sourceEnvelope[(size_t) b] = { mn, mx };
+        }
+
+        kind = SourceKind::sample;
+        rebuildDisplayEnvelope();
+        repaint();
+    }
+
     void WaveformView::clearSource()
     {
         sourceEnvelope.clear();

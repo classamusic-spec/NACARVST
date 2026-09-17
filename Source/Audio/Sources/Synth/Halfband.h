@@ -222,23 +222,31 @@ namespace nacar::synth
         4x UPSAMPLER, as two halfbands in series.
 
         A halfband always cuts at a quarter of its own output rate, which is
-        half of its input rate - so the same design works at both steps of the
-        cascade and no second set of coefficients is needed:
+        half of its input rate, so the same derivation serves both steps:
 
             stage 1   sr  -> 2sr,  passes 0 .. sr/2
             stage 2   2sr -> 4sr,  passes 0 .. sr
 
-        Stage 2's passband is wider than the signal it is handed, which is
-        exactly right: it has nothing left to remove on the way up, and on the
-        way down it is the stage that stops everything between sr and 2sr from
-        folding into the audible band.  Stage 1 then removes what lands between
-        sr/2 and sr.  Neither stage can do the other's job.
+        THE TWO STAGES ARE NOT EQUALLY IMPORTANT, and they are not the same
+        length.  Everything that folds into the audible band on the way back
+        down is folded there by stage 1: content at f between sr/2 and sr
+        arrives at sr - f, attenuated by nothing but stage 1's stopband.  Stage
+        2 only has to keep content between 1.5sr and 2sr out, which is far from
+        its own transition and which 19 taps already attenuates by 50 dB or
+        more - and its own weak point, just above sr, is fed by the part of the
+        band stage 1 has already emptied.
+
+        That asymmetry is measured, not assumed.  With both stages at 19 taps a
+        4x core is no better than the 2x one it replaced and on a driven ladder
+        it is measurably worse, because the images stage 2 lets through are
+        intermodulated by the nonlinearity and come back as new products.  With
+        stage 1 sharp it is 8 to 13 dB cleaner.  See kUltraHalfbandTaps.
 
         Time order is preserved throughout.  Halfband2xUp emits the even
         high-rate phase first and the odd one second, so feeding stage 2 with
         those two in that order produces the four 4x samples in order.
     */
-    template <int NumTaps>
+    template <int Stage1Taps, int Stage2Taps>
     class Halfband4xUp
     {
     public:
@@ -253,15 +261,15 @@ namespace nacar::synth
         }
 
     private:
-        Halfband2xUp<NumTaps> stage1;    ///< sr  -> 2sr
-        Halfband2xUp<NumTaps> stage2;    ///< 2sr -> 4sr
+        Halfband2xUp<Stage1Taps> stage1;    ///< sr  -> 2sr
+        Halfband2xUp<Stage2Taps> stage2;    ///< 2sr -> 4sr
     };
 
     /**
         4x DOWNSAMPLER.  The mirror image: decimate 4sr to 2sr twice over, in
         the reverse order to the upsampler's stages.
     */
-    template <int NumTaps>
+    template <int Stage1Taps, int Stage2Taps>
     class Halfband4xDown
     {
     public:
@@ -275,8 +283,8 @@ namespace nacar::synth
         }
 
     private:
-        Halfband2xDown<NumTaps> stage1;  ///< 2sr -> sr
-        Halfband2xDown<NumTaps> stage2;  ///< 4sr -> 2sr
+        Halfband2xDown<Stage1Taps> stage1;  ///< 2sr -> sr
+        Halfband2xDown<Stage2Taps> stage2;  ///< 4sr -> sr
     };
 
     /** 19 taps: 10 multiplies per phase.
@@ -292,17 +300,54 @@ namespace nacar::synth
     using VoiceUpsampler   = Halfband2xUp<kHalfbandTaps>;
     using VoiceDownsampler = Halfband2xDown<kHalfbandTaps>;
 
-    /** ULTRA's pair.  Same taps, one more stage.
+    /** ULTRA's pair.
 
-        The extra stage costs latency as well as arithmetic: each halfband's
-        group delay is `centre` samples at its own rate, so the round trip
-        through the 2x pair is 9 samples of the voice's own rate and through the
-        4x pair 13.5.  A voice started under ULTRA is therefore 4.5 samples -
-        94 microseconds at 48 kHz - behind a voice started under STUDIO.  That
-        matters nowhere except between two voices playing the same note in
-        phase, which unison does inside a single voice and never across two. */
+        LATENCY.  Each halfband's group delay is `centre` samples at its own
+        rate, so a round trip costs centre1 samples of the voice's rate plus
+        centre2 / 2 of it:
+
+            STUDIO   2x, 19 taps           9.0 samples
+            ULTRA    4x, 43 then 19 taps  25.5 samples
+
+        16.5 samples of difference, 344 microseconds at 48 kHz.  Two things
+        follow.  The half sample is real and unavoidable - `centre` is always
+        odd for a halfband, so the second stage always contributes a half - but
+        a constant fractional delay is latency, not distortion, and the
+        round-trip test in Tests/QualityTests.cpp fits the tone rather than
+        shifting it for exactly that reason.  And the 16.5 samples mean the
+        synth sits that much further behind the sample engine under ULTRA, and
+        that a note started under ULTRA is that much behind one still sounding
+        from STUDIO.  Neither is reported to the host as latency, because the
+        figure would change with a parameter. */
+    /** ULTRA's first stage: 43 taps, 22 multiplies per phase.
+
+        19 taps is the wrong length for the stage that does the final
+        decimation.  Its stopband only reaches -15 dB at 0.6 of the voice's
+        sample rate and -33 dB at 0.7, so a nonlinear product landing at 0.65sr
+        comes back at 0.35sr only 23 dB down.  Raising the core's rate does not
+        touch that: the same filter does the same folding either way, which is
+        why 4x with 19-tap converters measures no better than 2x - and on a
+        driven ladder at C7 measures 4.4 dB worse.
+
+        43 taps attenuates the same band by 43 dB at 0.6sr and 79 dB at 0.65sr.
+        With that in place the extra rate pays: measured with a sine into the
+        core, so that the oscillator contributes no inharmonic energy of its
+        own, ULTRA is 7.5 to 12.7 dB cleaner than STUDIO across 44.1, 48 and
+        96 kHz at MIDI 72, 84 and 96.
+
+        It is not free, and not only in arithmetic.  A sharper filter is also a
+        flatter one: the 2x round trip costs -3.2 dB at 0.4 of the sample rate
+        and -6.6 dB at 0.45, and ULTRA's costs -0.13 and -2.4.  ULTRA therefore
+        has a little more top octave than STUDIO as well as less aliasing.  That
+        is the correct direction - the roll-off is an artefact of a cheap
+        converter, not a voicing decision - but it does mean the two tiers are
+        not identical above about 15 kHz. */
     inline constexpr int kUltraHalfbandTaps = 43;
 
-    using VoiceUpsampler4x   = Halfband4xUp<kUltraHalfbandTaps>;
-    using VoiceDownsampler4x = Halfband4xDown<kUltraHalfbandTaps>;
+    /** ULTRA's second stage, at four times the rate.  19 taps, because its job
+        is the easy one and it runs twice as often as the first. */
+    inline constexpr int kUltraHalfbandTaps2 = kHalfbandTaps;
+
+    using VoiceUpsampler4x   = Halfband4xUp<kUltraHalfbandTaps, kUltraHalfbandTaps2>;
+    using VoiceDownsampler4x = Halfband4xDown<kUltraHalfbandTaps, kUltraHalfbandTaps2>;
 }

@@ -143,6 +143,25 @@ namespace nacar::synth
                 return vBlepPulse (readPhase, inc, pulseWidth);
         }
 
+        /** The same choice, for the scalar path: the waveform is a block
+            constant, so AnalogOscillator::shape()'s per-sample switch does not
+            need to exist here either. */
+        template <Waveform W>
+        forcedinline float shapeScalar (float readPhase, float inc, float pulseWidth,
+                                        float levelF, const WavetableContext& wt) noexcept
+        {
+            if constexpr (W == Waveform::sine)
+                return sineTurns (readPhase);
+            else if constexpr (W == Waveform::triangle)
+                return blepPulse (readPhase, inc, 0.5f);
+            else if constexpr (W == Waveform::saw)
+                return blepSaw (readPhase, inc);
+            else if constexpr (W == Waveform::pulse)
+                return blepPulse (readPhase, inc, pulseWidth);
+            else
+                return WavetableOscillator::read (wt, readPhase, levelF);
+        }
+
         forcedinline VecMask allLanesSet() noexcept
         {
             return VecMask::expand (0xFFFFFFFFu);
@@ -293,23 +312,35 @@ namespace nacar::synth
         }
     }
 
-    void UnisonOscillatorBank::renderWavetable (int count, float fundamentalHz, float invSampleRate,
-                                                float phaseMod, float syncFrac,
-                                                const WavetableContext& wt, float* y) noexcept
+    template <Waveform W>
+    void UnisonOscillatorBank::renderScalar (int count, float fundamentalHz, float invSampleRate,
+                                             float pulseWidth, float phaseMod, float syncFrac,
+                                             const WavetableContext& wt, float* y) noexcept
     {
-        // A transcription of AnalogOscillator::process for the one waveform
-        // whose inner loop is four table reads at four different indices.
+        // A transcription of AnalogOscillator::process onto the bank's own
+        // state, for the two cases where a vector is the wrong shape:
+        //
+        //   WAVETABLE, whose inner loop is four table reads per lane at four
+        //   different indices - a gather, which SIMDRegister does not offer and
+        //   SSE2 cannot do at all;
+        //
+        //   and a group of one, where three quarters of every register would be
+        //   arithmetic nobody reads.  Measured: with unison off, the vector
+        //   path costs about 4 % MORE than the scalar one, and a great many
+        //   patches have unison off.
         for (int v = 0; v < count; ++v)
         {
             const float inc = juce::jlimit (0.0f, 0.45f,
                                             fundamentalHz * detuneRatio[v] * invSampleRate);
 
-            const float levelF = WavetableBank::levelForIncrement (inc);
+            const float levelF = (W == Waveform::wavetable)
+                                    ? WavetableBank::levelForIncrement (inc)
+                                    : 0.0f;
 
             float readPhase = phase[v] + phaseMod;
             readPhase -= std::floor (readPhase);
 
-            float out = WavetableOscillator::read (wt, readPhase, levelF) + pendingBlep[v];
+            float out = shapeScalar<W> (readPhase, inc, pulseWidth, levelF, wt) + pendingBlep[v];
             pendingBlep[v] = 0.0f;
 
             if (syncFrac >= 0.0f)
@@ -320,14 +351,27 @@ namespace nacar::synth
                 float after = phaseMod;
                 after -= std::floor (after);
 
-                const float jump = WavetableOscillator::read (wt, after,  levelF)
-                                 - WavetableOscillator::read (wt, before, levelF);
+                const float jump = shapeScalar<W> (after,  inc, pulseWidth, levelF, wt)
+                                 - shapeScalar<W> (before, inc, pulseWidth, levelF, wt);
 
                 float residualNow = 0.0f, residualNext = 0.0f;
                 blepSplit (syncFrac, residualNow, residualNext);
 
                 out              += 0.5f * jump * residualNow;
                 pendingBlep[v]    = 0.5f * jump * residualNext;
+            }
+
+            if constexpr (W == Waveform::triangle)
+            {
+                float tri = triLeak * triState[v] + 4.0f * inc * out;
+                tri = flush (tri);
+
+                const float dy = flush ((tri - dcX1[v]) + dcR * dcY1[v]);
+
+                triState[v] = tri;
+                dcX1[v]     = tri;
+                dcY1[v]     = dy;
+                out         = dy;
             }
 
             float next = (syncFrac >= 0.0f) ? (1.0f - syncFrac) * inc
@@ -362,26 +406,49 @@ namespace nacar::synth
         alignas (64) float lv [kUnisonPadded] {};
         alignas (64) float rv [kUnisonPadded] {};
 
+        // A unison group smaller than half a register is cheaper scalar - see
+        // the note on renderScalar.  The threshold is expressed in terms of the
+        // register width so that it still means the same thing on a build whose
+        // vectors are eight wide.
+        const bool scalarIsCheaper = (n * 2 <= kVecWidth);
+
         switch (wave)
         {
             case Waveform::sine:
-                renderVector<Waveform::sine> (n, fundamentalHz, invSampleRate,
-                                              pulseWidth, phaseMod, syncFrac, y);
-                break;
-            case Waveform::triangle:
-                renderVector<Waveform::triangle> (n, fundamentalHz, invSampleRate,
+                if (scalarIsCheaper)
+                    renderScalar<Waveform::sine> (n, fundamentalHz, invSampleRate,
+                                                  pulseWidth, phaseMod, syncFrac, wt, y);
+                else
+                    renderVector<Waveform::sine> (n, fundamentalHz, invSampleRate,
                                                   pulseWidth, phaseMod, syncFrac, y);
                 break;
+            case Waveform::triangle:
+                if (scalarIsCheaper)
+                    renderScalar<Waveform::triangle> (n, fundamentalHz, invSampleRate,
+                                                      pulseWidth, phaseMod, syncFrac, wt, y);
+                else
+                    renderVector<Waveform::triangle> (n, fundamentalHz, invSampleRate,
+                                                      pulseWidth, phaseMod, syncFrac, y);
+                break;
             case Waveform::saw:
-                renderVector<Waveform::saw> (n, fundamentalHz, invSampleRate,
-                                             pulseWidth, phaseMod, syncFrac, y);
+                if (scalarIsCheaper)
+                    renderScalar<Waveform::saw> (n, fundamentalHz, invSampleRate,
+                                                 pulseWidth, phaseMod, syncFrac, wt, y);
+                else
+                    renderVector<Waveform::saw> (n, fundamentalHz, invSampleRate,
+                                                 pulseWidth, phaseMod, syncFrac, y);
                 break;
             case Waveform::pulse:
-                renderVector<Waveform::pulse> (n, fundamentalHz, invSampleRate,
-                                               pulseWidth, phaseMod, syncFrac, y);
+                if (scalarIsCheaper)
+                    renderScalar<Waveform::pulse> (n, fundamentalHz, invSampleRate,
+                                                   pulseWidth, phaseMod, syncFrac, wt, y);
+                else
+                    renderVector<Waveform::pulse> (n, fundamentalHz, invSampleRate,
+                                                   pulseWidth, phaseMod, syncFrac, y);
                 break;
             case Waveform::wavetable:
-                renderWavetable (n, fundamentalHz, invSampleRate, phaseMod, syncFrac, wt, y);
+                renderScalar<Waveform::wavetable> (n, fundamentalHz, invSampleRate,
+                                                   pulseWidth, phaseMod, syncFrac, wt, y);
                 break;
         }
 

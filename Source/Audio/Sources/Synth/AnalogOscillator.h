@@ -83,11 +83,18 @@ namespace nacar::synth
         for every waveform, every unison count from 1 to 8, and a spread of
         detune, pulse width and sample rate.
 
-        WAVETABLE is deliberately not vectorised.  Reading it is four table
-        lookups per lane at indices that differ per lane, and a gather is not
-        something SIMDRegister offers or that SSE2 - the baseline this project
-        compiles for - can do at all.  That waveform takes a scalar path here
-        that is a transcription of AnalogOscillator::process.
+        Two cases deliberately stay scalar, and take a path here that is a
+        transcription of AnalogOscillator::process.
+
+        WAVETABLE, because reading it is four table lookups per lane at indices
+        that differ per lane - a gather, which SIMDRegister does not offer and
+        which SSE2, the baseline this project compiles for, cannot do at all.
+
+        And a group smaller than half a register, because a vector whose lanes
+        are mostly arithmetic nobody reads is not free: measured with unison
+        off, the vector path cost about 4 % MORE than the scalar one, and a
+        great many patches have unison off.  Making that case take the scalar
+        path turned a 3 % regression into a 2 % gain.
 
         §146: no allocation, no lock, no IO.  Every buffer is a fixed-size
         member or a stack array, sized from kMaxUnison at compile time, and
@@ -150,9 +157,10 @@ namespace nacar::synth
                            float pulseWidth, float phaseMod, float syncFrac,
                            float* y) noexcept;
 
-        void renderWavetable (int count, float fundamentalHz, float invSampleRate,
-                              float phaseMod, float syncFrac,
-                              const WavetableContext& wt, float* y) noexcept;
+        template <Waveform W>
+        void renderScalar (int count, float fundamentalHz, float invSampleRate,
+                           float pulseWidth, float phaseMod, float syncFrac,
+                           const WavetableContext& wt, float* y) noexcept;
 
         alignas (64) float phase       [kUnisonPadded] {};
         alignas (64) float triState    [kUnisonPadded] {};

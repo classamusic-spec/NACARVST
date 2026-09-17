@@ -100,7 +100,17 @@ namespace nacar::synth
     //
     //  Realtime-safe: prepare() on a filter or a saturator sets coefficients
     //  and fills fixed-size member arrays.  It allocates nothing, locks
-    //  nothing and logs nothing.
+    //  nothing and logs nothing.  Note-on already clears the same arrays, so
+    //  the added cost is the coefficient arithmetic and nothing else.
+    //
+    //  ONE KNOWN DIFFERENCE BEYOND ALIASING.  The COMB model's delay line is a
+    //  fixed 4096 samples of the rate it runs at, so the lowest note it can
+    //  reach is that rate divided by 4092.  At a 48 kHz session that is 23 Hz
+    //  under STUDIO and 47 Hz under ULTRA: a comb tuned below 47 Hz is a
+    //  different pitch in the two tiers.  It is the only place where the factor
+    //  changes something other than how much of the signal is aliasing, it is
+    //  inherited from the 2x core rather than introduced here, and it cannot be
+    //  fixed from this file - the delay length lives in SynthFilter.
     // -----------------------------------------------------------------------
     void SynthVoice::retuneCore (int factor) noexcept
     {

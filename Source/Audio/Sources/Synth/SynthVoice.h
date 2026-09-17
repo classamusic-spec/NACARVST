@@ -149,9 +149,12 @@ namespace nacar::synth
         //
         // Only one of the two converter pairs is used at a time, and the
         // filters and the saturator above are prepared for whichever factor is
-        // in force.  They are cheap - a few hundred bytes each - so both exist
-        // rather than one being chosen at prepare() time, which would make the
-        // factor fixed for the lifetime of the instrument.
+        // in force - there is one set of those, not two, because re-preparing
+        // them costs less than the 16 kB of comb delay a second SynthFilter
+        // would carry per channel per filter.  The converters themselves are
+        // under two kilobytes for both pairs, so both are always present rather
+        // than one being chosen at prepare() time, which would fix the factor
+        // for the lifetime of the instrument.
         VoiceUpsampler upsampler[2];
         VoiceDownsampler downsampler[2];
 

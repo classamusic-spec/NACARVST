@@ -49,6 +49,11 @@
 #include "Audio/Modulation/ModMatrix.h"
 #include "Presets/FactoryPresets.h"
 #include "Presets/PresetManager.h"
+#include "Audio/Print/PrintEngine.h"
+#include "Mutation/MutationEngine.h"
+#include "Mutation/MutationRecipe.h"
+
+#include <map>
 
 using namespace nacar;
 
@@ -1922,6 +1927,323 @@ namespace presetcheck
 }
 
 // ===========================================================================
+//  THE GOLDEN SET  -  phases 25 and 26
+//
+//  A golden preset is one the instrument is JUDGED BY: if the engine changes
+//  and these move, something has been broken or improved and somebody has to
+//  say which. That judgement is a listening judgement and this tool cannot
+//  make it. What it can do - and what "golden" means to a build rather than
+//  to a listener - is notice the movement.
+//
+//  So this mode does two things:
+//
+//    1. renders a fixed set deterministically and fingerprints it, comparing
+//       against a stored baseline. Drift beyond tolerance fails the run. That
+//       catches the class of defect that is otherwise invisible: an engine
+//       change that quietly revoices the whole library.
+//
+//    2. writes the audio out, named and ordered, so a person can sit down and
+//       audition it. THAT is the part that accepts a golden preset. Nothing
+//       here does it and nothing here claims to.
+//
+//  The mutations are golden in a stronger sense than the presets, because a
+//  mutation is reproducible from a seed: print a preset, mutate it with a
+//  fixed recipe, and the result is a function of the engine alone. A change to
+//  the mutation engine shows up here as a number, not as an opinion.
+// ===========================================================================
+namespace golden
+{
+    using namespace presetcheck;
+
+    struct Entry
+    {
+        const char* preset;          ///< a name from the factory library
+        const char* claim;           ///< what a listener is asked to confirm
+        bool        mutate;          ///< print it and mutate it as well
+        juce::uint32 seed;
+        mutation::Intent intent;
+        mutation::Distance distance;
+    };
+
+    /** Chosen to cover the instrument rather than to flatter it: each of the
+        three characters, each filter model, the tape and digital degradation
+        paths, the granular and reverb tails, a bass that has to hold its low
+        end and a drum that has to hit. If an engine change cannot be heard in
+        one of these, it probably cannot be heard. */
+    static const std::array<Entry, 12> entries {{
+        { "Niebla en la Ciudad", "the default patch: wet, minor, unhurried",              true,  11u, mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Cassette Rhodes",     "a tine whose index decays while the filter opens",      true,  23u, mutation::Intent::broken,   mutation::Distance::near_ },
+        { "Long Hammer",         "an 808 whose pitch falls on the attack",                false, 0u,  mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Tunnel Reese",        "two detuned saws that stay mono underneath",            false, 0u,  mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Foundation",          "a sub that is a fundamental and nothing else",          false, 0u,  mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Iron Temple",         "a noise burst into a tuned comb",                       true,  47u, mutation::Intent::ghost,    mutation::Distance::far },
+        { "Crystal Vespers",     "fixed inharmonic resonances over a spectral table",     false, 0u,  mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Ghost Arpeggio",      "a held note articulated by the grid",                   true,  59u, mutation::Intent::rhythmic, mutation::Distance::near_ },
+        { "Tape Dust",           "degradation as the audible content",                    true,  71u, mutation::Intent::distant,  mutation::Distance::far },
+        { "Waiting Room",        "a room rather than a note",                             true,  83u, mutation::Intent::cloud,    mutation::Distance::far },
+        { "Glass Hat",           "high-passed noise that has to stay a transient",        false, 0u,  mutation::Intent::memory,   mutation::Distance::near_ },
+        { "Salt Water Piano",    "a struck body where the comb carries the tone",         true,  97u, mutation::Intent::dark,     mutation::Distance::far },
+    }};
+
+    struct Fingerprint
+    {
+        juce::String name;
+        float peakDb = 0.0f, rmsDb = 0.0f, centroidHz = 0.0f;
+        float lowPct = 0.0f, highPct = 0.0f, monoDb = 0.0f;
+        int   lengthSamples = 0;
+    };
+
+    static juce::File baselineFile()
+    {
+        return juce::File (__FILE__).getParentDirectory().getChildFile ("golden-baseline.txt");
+    }
+
+    static juce::String formatLine (const Fingerprint& f)
+    {
+        return f.name + "\t" + juce::String (f.peakDb, 2) + "\t" + juce::String (f.rmsDb, 2)
+             + "\t" + juce::String (f.centroidHz, 1) + "\t" + juce::String (f.lowPct, 2)
+             + "\t" + juce::String (f.highPct, 2) + "\t" + juce::String (f.monoDb, 2)
+             + "\t" + juce::String (f.lengthSamples);
+    }
+
+    static Fingerprint fingerprintOf (const juce::String& name,
+                                      const juce::AudioBuffer<float>& audio, double rate)
+    {
+        const auto m = measure (audio, rate, 261.63, false);
+
+        Fingerprint f;
+        f.name = name;
+        f.peakDb = m.peakDb;
+        f.rmsDb = m.rmsDb;
+        f.centroidHz = m.centroidHz;
+        f.lowPct = m.lowEnergyPct;
+        f.highPct = m.highEnergyPct;
+        f.monoDb = m.monoRetainDb;
+        f.lengthSamples = audio.getNumSamples();
+        return f;
+    }
+
+    static int run (double sampleRate, const juce::File& outDir, bool writeFiles, bool rewrite)
+    {
+        const auto& library = presets::factoryLibrary();
+
+        std::cout << "NACAR golden set\n"
+                     "  " << entries.size() << " presets, each rendered; those marked below are\n"
+                     "  also printed and mutated from a fixed seed.\n\n"
+                     "  This compares against a stored fingerprint and reports DRIFT. It does\n"
+                     "  not decide whether anything sounds right - that is what the audio in\n"
+                     "  the output directory is for, and nobody has listened to it.\n\n";
+
+        std::vector<Fingerprint> prints;
+        int missing = 0;
+
+        for (const auto& e : entries)
+        {
+            const juce::String wanted (e.preset);
+
+            const auto found = std::find_if (library.begin(), library.end(),
+                                             [&wanted] (const presets::FactoryPreset& p)
+                                             { return p.name == wanted; });
+
+            if (found == library.end())
+            {
+                std::cout << "  MISSING  " << wanted.toStdString()
+                          << " is not in the factory library\n";
+                ++missing;
+                continue;
+            }
+
+            const auto audio = renderPreset (*found, sampleRate, 256);
+            prints.push_back (fingerprintOf (wanted, audio, sampleRate));
+
+            if (writeFiles)
+            {
+                outDir.createDirectory();
+                writeWav (outDir.getChildFile ("golden-" + juce::File::createLegalFileName (wanted) + ".wav"),
+                          audio, sampleRate);
+            }
+
+            if (! e.mutate)
+                continue;
+
+            // A golden MUTATION: the printed preset, mutated from a fixed
+            // seed. Reproducible from the engine alone, so a change to the
+            // mutation engine is a number here rather than an opinion.
+            PrintEngine::Snapshot snapshot;
+
+            {
+                BenchHost host;
+                const auto payload = PresetManager::payloadOf (*found);
+                PresetManager::applyParameters (host.registry, payload);
+
+                for (int i = 0; i < numParameters; ++i)
+                    snapshot.values[(size_t) i] = host.registry.userValue ((PID) i);
+
+                snapshot.fxOrder = PresetManager::fxOrderOf (payload);
+                snapshot.modMatrix = PresetManager::makeModMatrixTree (payload);
+            }
+
+            PrintEngine::Settings settings;
+            settings.sampleRate = sampleRate;
+            settings.blockSize = 256;
+            settings.holdSeconds = 1.5;
+            settings.maxTailSeconds = 4.0;
+            settings.baseName = {};        // measured, not kept
+
+            const auto printed = PrintEngine::render (snapshot, settings);
+
+            if (! printed.ok || printed.audio == nullptr)
+            {
+                std::cout << "  PRINT FAILED  " << wanted.toStdString() << ": "
+                          << printed.failure.toStdString() << "\n";
+                ++missing;
+                continue;
+            }
+
+            mutation::Recipe recipe;
+            recipe.seed = e.seed;
+            recipe.intent = e.intent;
+            recipe.distance = e.distance;
+            recipe.harmonyMode = harmony::Mode::safe;
+
+            AnalysisResult analysis;
+            harmony::Context context;
+
+            const auto result = mutation::MutationEngine::render (recipe, *printed.audio,
+                                                                  analysis, context);
+
+            if (! result.ok || result.audio == nullptr)
+            {
+                std::cout << "  MUTATION FAILED  " << wanted.toStdString() << ": "
+                          << result.failure.toStdString() << "\n";
+                ++missing;
+                continue;
+            }
+
+            const auto label = wanted + " / " + mutation::nameOf (e.intent)
+                               + " " + juce::String ((int) e.seed);
+
+            prints.push_back (fingerprintOf (label, result.audio->audio, sampleRate));
+
+            if (writeFiles)
+                writeWav (outDir.getChildFile ("golden-mutation-"
+                                               + juce::File::createLegalFileName (label) + ".wav"),
+                          result.audio->audio, sampleRate);
+        }
+
+        // -- compare against the baseline ------------------------------------
+        const auto file = baselineFile();
+
+        if (rewrite || ! file.existsAsFile())
+        {
+            juce::StringArray lines;
+
+            lines.add ("# NACAR golden fingerprints.");
+            lines.add ("# Regenerated with: NacarBench --golden --rewrite");
+            lines.add ("# A change here is a change to what the instrument SOUNDS LIKE.");
+            lines.add ("# Nothing may update this file without somebody having listened.");
+            lines.add ("# name\tpeakDb\trmsDb\tcentroidHz\tlow%\thigh%\tmonoDb\tsamples");
+
+            for (const auto& f : prints)
+                lines.add (formatLine (f));
+
+            file.replaceWithText (lines.joinIntoString ("\n") + "\n");
+
+            std::cout << "  Wrote " << prints.size() << " fingerprints to "
+                      << file.getFileName().toStdString() << ".\n"
+                      << "  THIS IS NOT ACCEPTANCE. It records what the engine does today so a\n"
+                      << "  later change can be noticed. Somebody still has to listen.\n";
+            return missing;
+        }
+
+        juce::StringArray stored;
+        stored.addLines (file.loadFileAsString());
+
+        std::map<juce::String, Fingerprint> baseline;
+
+        for (const auto& line : stored)
+        {
+            if (line.startsWithChar ('#') || line.trim().isEmpty())
+                continue;
+
+            auto parts = juce::StringArray::fromTokens (line, "\t", "");
+
+            if (parts.size() < 8)
+                continue;
+
+            Fingerprint f;
+            f.name = parts[0];
+            f.peakDb = parts[1].getFloatValue();
+            f.rmsDb = parts[2].getFloatValue();
+            f.centroidHz = parts[3].getFloatValue();
+            f.lowPct = parts[4].getFloatValue();
+            f.highPct = parts[5].getFloatValue();
+            f.monoDb = parts[6].getFloatValue();
+            f.lengthSamples = parts[7].getIntValue();
+
+            baseline[f.name] = f;
+        }
+
+        std::cout << std::left << "  " << std::setw (46) << "ENTRY"
+                  << std::right << std::setw (10) << "dPEAK" << std::setw (10) << "dRMS"
+                  << std::setw (12) << "dCENTROID" << std::setw (10) << "dMONO" << "  VERDICT\n"
+                  << "  " << std::string (96, '-') << "\n";
+
+        int drifted = 0;
+
+        for (const auto& f : prints)
+        {
+            const auto it = baseline.find (f.name);
+
+            if (it == baseline.end())
+            {
+                std::cout << std::left << "  " << std::setw (46) << f.name.toStdString()
+                          << "  NEW - no fingerprint stored\n";
+                continue;
+            }
+
+            const auto& b = it->second;
+
+            const float dPeak = f.peakDb - b.peakDb;
+            const float dRms  = f.rmsDb - b.rmsDb;
+            const float dCent = b.centroidHz > 1.0f ? (f.centroidHz / b.centroidHz - 1.0f) * 100.0f
+                                                    : 0.0f;
+            const float dMono = f.monoDb - b.monoDb;
+
+            // Generous enough to absorb floating-point reassociation from a
+            // compiler change, tight enough that a revoice cannot hide.
+            const bool moved = std::abs (dPeak) > 0.10f || std::abs (dRms) > 0.10f
+                            || std::abs (dCent) > 1.0f  || std::abs (dMono) > 0.10f
+                            || f.lengthSamples != b.lengthSamples;
+
+            if (moved)
+                ++drifted;
+
+            std::cout << std::left << "  " << std::setw (46) << f.name.toStdString()
+                      << std::right << std::fixed << std::setprecision (2)
+                      << std::setw (10) << dPeak
+                      << std::setw (10) << dRms
+                      << std::setw (11) << dCent << "%"
+                      << std::setw (10) << dMono
+                      << "  " << (moved ? "DRIFTED" : "held") << "\n";
+        }
+
+        std::cout << "\n  " << prints.size() << " entries, " << drifted << " drifted, "
+                  << missing << " missing.\n\n";
+
+        if (drifted > 0)
+            std::cout << "  DRIFT IS NOT AUTOMATICALLY A DEFECT - an intended improvement drifts\n"
+                         "  too. It means somebody has to listen to the audio and decide, and\n"
+                         "  then regenerate the baseline with --rewrite if the new sound is the\n"
+                         "  one we want. What it must never be is updated without listening.\n\n";
+
+        std::cout << "  Nobody has listened to any of this.\n";
+
+        return drifted + missing;
+    }
+}
+
+// ===========================================================================
 int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -1933,6 +2255,8 @@ int main (int argc, char* argv[])
     bool throughChain = false;
     bool attribute = false;
     bool presetMode = false;
+    bool goldenMode = false;
+    bool rewriteGolden = false;
     juce::String filter;
 
     for (int i = 1; i < argc; ++i)
@@ -1946,6 +2270,8 @@ int main (int argc, char* argv[])
         else if (arg == "--chain")                 throughChain = true;
         else if (arg == "--attribute")             attribute = true;
         else if (arg == "--presets")               presetMode = true;
+        else if (arg == "--golden")                goldenMode = true;
+        else if (arg == "--rewrite")               rewriteGolden = true;
         else if (! arg.startsWith ("--"))          filter = arg;
     }
 
@@ -1959,6 +2285,12 @@ int main (int argc, char* argv[])
     {
         runAttribution (filter, sampleRate);
         return 0;
+    }
+
+    if (goldenMode)
+    {
+        const int problems = golden::run (sampleRate, outDir, writeFiles, rewriteGolden);
+        return problems > 0 ? 1 : 0;
     }
 
     if (presetMode)

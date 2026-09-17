@@ -4,6 +4,7 @@
 
 #include "Memory/MemoryEngine.h"
 #include "Modulation/ModulationEngine.h"
+#include "Modulation/SequencerEngine.h"
 
 #include "Sources/Sample/SampleEngine.h"
 
@@ -153,11 +154,23 @@ namespace nacar
         SampleEngine sampleSource;
 
         ModulationEngine modulation;
+
+        /** The SEQ page's four lanes, advanced against the host transport.  It
+            sits beside the matrix rather than inside it because a lane is not a
+            routing: it names an absolute position for a parameter rather than
+            an offset from one, and the two compose in `applyModulation` below. */
+        SequencerEngine sequencer;
+
         MemoryEngine memory;
 
+        /** Everything the overlay may be asked to override in one block: eight
+            matrix routings and four sequencer lanes, each of which may name a
+            parameter of its own. */
+        static constexpr int maxOverlayTargets = ModMatrix::numSlots + SequencerEngine::numLanes;
+
         /** The parameters the overlay is currently overriding, so the next
-            block can take back the ones the matrix has stopped targeting. */
-        PID activeTargets[ModMatrix::numSlots] {};
+            block can take back the ones nothing targets any more. */
+        PID activeTargets[maxOverlayTargets] {};
         int numActiveTargets = 0;
 
         RetroEngine  retro;
@@ -226,6 +239,7 @@ namespace nacar
             sampleSource.prepare (spec);
 
             modulation.prepare (spec);
+            sequencer.prepare (spec);
             memory.prepare (spec);
 
             retro.prepare (spec);
@@ -254,6 +268,7 @@ namespace nacar
             synth.reset();
             sampleSource.reset();
             modulation.reset();
+            sequencer.reset();
             memory.reset();
 
             retro.reset();
@@ -459,28 +474,78 @@ namespace nacar
             that this runs before the synth renders, so a routing takes effect
             in the same block it was computed for rather than the next one.
         */
+        /**
+            HOW A LANE AND A ROUTING COMPOSE.
+
+            They sum, in the overlay's own normalised units, and the sequencer
+            is resolved first.
+
+            A matrix routing is an OFFSET: depth times source, added to wherever
+            the user put the knob.  A sequencer lane is a POSITION: its step
+            value is 0..1 across the target's whole range and means "put it
+            here", because that is what the step well draws and there is no
+            per-lane depth control to mean anything else.  Summing a position
+            with an offset only makes sense one way round, so the lane's
+            contribution is expressed as the offset that reaches its position -
+
+                seqOffset = stepValue - normalisedUserValue (target)
+
+            - and the matrix's offset is then added to that.  The result is that
+            the lane sets the parameter and the matrix moves around it: an LFO
+            routed to a sequenced cutoff wobbles each step rather than being
+            silently discarded, and a lane on an unrouted parameter lands on
+            exactly its step value.  ParameterRegistry::setModulation clamps the
+            sum into the parameter's own range, so neither can push it out.
+
+            A parameter no lane and no routing targets any more has its override
+            REMOVED rather than left installed - a stale override is a knob
+            frozen at the last step the sequencer played, which is a control
+            that has silently stopped working.
+        */
+        float overlayOffsetFor (const ParameterRegistry& p, PID target) const noexcept
+        {
+            float offset = modulation.modulationFor (target);
+
+            for (int i = 0; i < sequencer.numApplied(); ++i)
+            {
+                const auto& a = sequencer.applied (i);
+
+                if (a.target == target)
+                {
+                    offset += a.value - p.normalisedUserValue (target);
+                    break;      // one lane per parameter: see SequencerEngine.h
+                }
+            }
+
+            return offset;
+        }
+
         void applyModulation (const ParameterRegistry& p)
         {
-            const auto& routings = modulation.matrix().liveRoutings();
-
-            PID targets[ModMatrix::numSlots];
+            PID targets[maxOverlayTargets];
             int numTargets = 0;
 
-            for (const auto& r : routings)
+            // offsetFor() already sums every routing that points at this
+            // parameter, and the sequencer has already picked one lane per
+            // parameter, so a shared target is written exactly once.
+            const auto addTarget = [&targets, &numTargets] (PID t) noexcept
             {
-                if (! r.enabled || r.target == PID::count || r.source == ModSource::none)
-                    continue;
+                if (t == PID::count || numTargets >= maxOverlayTargets)
+                    return;
 
-                // offsetFor() already sums every routing that points at this
-                // parameter, so a target that two slots share is written once.
-                bool seen = false;
+                for (int i = 0; i < numTargets; ++i)
+                    if (targets[i] == t)
+                        return;
 
-                for (int i = 0; i < numTargets && ! seen; ++i)
-                    seen = targets[i] == r.target;
+                targets[numTargets++] = t;
+            };
 
-                if (! seen)
-                    targets[numTargets++] = r.target;
-            }
+            for (const auto& r : modulation.matrix().liveRoutings())
+                if (r.enabled && r.source != ModSource::none)
+                    addTarget (r.target);
+
+            for (int i = 0; i < sequencer.numApplied(); ++i)
+                addTarget (sequencer.applied (i).target);
 
             // Drop last block's overrides that this block no longer wants.
             for (int i = 0; i < numActiveTargets; ++i)
@@ -495,7 +560,7 @@ namespace nacar
             }
 
             for (int i = 0; i < numTargets; ++i)
-                p.setModulation (targets[i], modulation.modulationFor (targets[i]));
+                p.setModulation (targets[i], overlayOffsetFor (p, targets[i]));
 
             std::copy (targets, targets + numTargets, activeTargets);
             numActiveTargets = numTargets;
@@ -558,6 +623,19 @@ namespace nacar
             macros.hostBpm         = transport.bpm;
             macros.ppqPosition     = transport.ppqPosition;
             macros.transportPlaying = transport.playing;
+
+            // The sequencer resolves BEFORE the matrix, because a lane names a
+            // position and a routing offsets from one: applyModulation adds the
+            // matrix's offset to whatever step the lane has landed on.  Both
+            // read the same block's transport, so a sequenced parameter and a
+            // routing to it move together rather than a block apart.
+            mod::Clock clock;
+            clock.sampleRate  = spec.sampleRate;
+            clock.bpm         = transport.bpm;
+            clock.ppqPosition = transport.ppqPosition;
+            clock.playing     = transport.playing;
+
+            sequencer.beginBlock (numSamples, clock);
 
             modulation.updateBlock (macros, p);
             applyModulation (p);
@@ -704,5 +782,15 @@ namespace nacar
     void NacarEngine::rebuildModMatrix (const juce::ValueTree& tree)
     {
         impl->modulation.rebuildModMatrix (tree);
+    }
+
+    void NacarEngine::rebuildSequencer (const juce::ValueTree& tree)
+    {
+        impl->sequencer.rebuildFromTree (tree);
+    }
+
+    int NacarEngine::getSequencerStep (int lane) const noexcept
+    {
+        return impl->sequencer.currentStep (lane);
     }
 }

@@ -111,6 +111,7 @@ namespace nacar
         stateManager.session().addListener (this);
         publishFxOrder();
         publishModMatrix();
+        publishSequencer();
 
         // 20 Hz is fast enough that a decode feels immediate and slow enough
         // that it costs nothing.  See timerCallback(): this is the processor's
@@ -162,6 +163,14 @@ namespace nacar
     void NacarProcessor::publishModMatrix()
     {
         engine.rebuildModMatrix (stateManager.session().getChildWithName (ids::MODMATRIX));
+    }
+
+    void NacarProcessor::publishSequencer()
+    {
+        // An absent SEQUENCER branch is not an error: the SEQ page creates it
+        // the first time it is opened, so a session that has never been there
+        // simply publishes four empty lanes and the sequencer does nothing.
+        engine.rebuildSequencer (stateManager.session().getChildWithName (ids::SEQUENCER));
     }
 
     // -----------------------------------------------------------------------
@@ -291,18 +300,26 @@ namespace nacar
 
         if (tree.hasType (ids::MODSLOT) || tree.hasType (ids::MODMATRIX))
             publishModMatrix();
+
+        // A step value, a gate mask, a length, a target, an enable or the
+        // shared division: every one of them changes what the audio thread has
+        // to play, so the whole branch is republished rather than patched.
+        if (tree.hasType (ids::SEQLANE) || tree.hasType (ids::SEQUENCER))
+            publishSequencer();
     }
 
     void NacarProcessor::valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&)
     {
         publishFxOrder();
         publishModMatrix();
+        publishSequencer();
     }
 
     void NacarProcessor::valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int)
     {
         publishFxOrder();
         publishModMatrix();
+        publishSequencer();
     }
     void NacarProcessor::valueTreeChildOrderChanged (juce::ValueTree&, int, int)        {}
     void NacarProcessor::valueTreeParentChanged (juce::ValueTree&)                      {}
@@ -310,6 +327,7 @@ namespace nacar
     {
         publishFxOrder();
         publishModMatrix();
+        publishSequencer();
     }
 
     // -----------------------------------------------------------------------
@@ -550,6 +568,7 @@ namespace nacar
         // attached, so both are republished explicitly here too.
         publishFxOrder();
         publishModMatrix();
+        publishSequencer();
 
         // A session that names a sample has to decode it again: the audio is
         // not in the host's blob, only the path is.  Asynchronously, like any

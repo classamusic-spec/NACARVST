@@ -139,6 +139,15 @@ namespace nacar
             it to the audio thread.  Message thread only. */
         void rebuildModMatrix (const juce::ValueTree&);
 
+        /** Rebuilds the four sequencer lanes from the session tree's SEQUENCER
+            branch and publishes them to the audio thread.  Message thread only;
+            an invalid tree publishes four empty lanes, which do nothing. */
+        void rebuildSequencer (const juce::ValueTree&);
+
+        /** Which step a sequencer lane is on as of the last block, for the SEQ
+            page's playhead.  Safe from the message thread: one relaxed load. */
+        int getSequencerStep (int lane) const noexcept;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> impl;

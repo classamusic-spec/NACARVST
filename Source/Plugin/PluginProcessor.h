@@ -189,6 +189,11 @@ namespace nacar
         /** Host tempo as of the last block; 120 when the host provides none. */
         double getHostBpm() const noexcept { return hostBpm.load (std::memory_order_relaxed); }
 
+        /** Which step a sequencer lane is on as of the last block.  The SEQ
+            page's playhead reads this rather than running a clock of its own,
+            so what it draws is where the engine actually is. */
+        int getSequencerStep (int lane) const noexcept { return engine.getSequencerStep (lane); }
+
     private:
         void updateMeters (const juce::AudioBuffer<float>&);
         void pushScope (const juce::AudioBuffer<float>&) noexcept;
@@ -200,6 +205,10 @@ namespace nacar
         // integer.
         void publishFxOrder();
         void publishModMatrix();
+
+        /** The same, for the SEQ page's four lanes: resolved off the tree here
+            and published to the engine's double buffer. */
+        void publishSequencer();
 
         /** Starts (or cancels) an asynchronous decode of whatever the SAMPLE
             branch names.  Message thread; returns immediately. */

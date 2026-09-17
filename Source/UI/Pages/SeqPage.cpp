@@ -2,28 +2,29 @@
 
 /*
     ======================================================================
-      SEQ  -  what is real and what is not
+      SEQ  -  what this page does
     ======================================================================
 
-    REAL.  Four lanes of sixteen steps.  Each step has a value and a gate;
-    each lane has a length, an enable and a target parameter chosen from the
-    parameter table itself.  All of it is written into the session tree under
-    a SEQUENCER child, so it saves with the project, travels with a preset
-    and survives a reload.  The editing is real editing: drag to paint
-    values, shift-click to toggle gates, and the well shows exactly what is
-    stored.
+    Four lanes of sixteen steps.  Each step has a value and a gate; each
+    lane has a length, an enable and a target parameter chosen from the
+    parameter table itself.  All of it is written into the session tree
+    under a SEQUENCER child, so it saves with the project, travels with a
+    preset and survives a reload.  The editing is real editing: drag to
+    paint values, shift-click to toggle gates, and the well shows exactly
+    what is stored.
 
-    NOT REAL.  Nothing reads that data.  There is no trigger engine: no
-    lane is advanced against the host clock, and no step is ever applied to
-    its target parameter.  The PREVIEW playhead on this page is an editing
-    aid driven by the interface clock, and the page says so on its face.
+    AND IT IS PLAYED.  Source/Audio/Modulation/SequencerEngine advances
+    exactly this tree against the host transport and applies each lane's
+    current step to its target through the modulation overlay; the processor
+    republishes the branch whenever anything here writes to it.  A step
+    value is absolute - 0..1 across the target parameter's whole range, the
+    height of the bar the well draws - and a gate of 0 holds the previous
+    value rather than zeroing it.  The engine's header is where those
+    decisions are argued.
 
-    The master specification is deliberate about this (section 129): the
-    sequencer is a V1 foundation and must not be allowed to delay core sound
-    quality.  So the data model and the editor are finished and the engine is
-    not attempted.  When it is written it will live next to the other
-    modulation sources in Source/Audio/Modulation/ and will read exactly the
-    tree this page writes.
+    The PREVIEW playhead is now a readout of the engine's own position, not
+    a clock of its own: it asks the processor which step each lane is on.
+    The lanes advance whether or not it is switched on.
     ======================================================================
 */
 
@@ -42,20 +43,14 @@ namespace nacar::ui
         constexpr int   targetPillW   = 168;
         constexpr int   lengthPillW   = 62;
 
-        /** The tempo divisions a lane can run at, and what each is worth in
-            beats.  Kept together so the two can never disagree. */
-        struct Division { const char* name; double beats; };
-
-        const std::array<Division, 9> divisions {{
-            { "1/32",  0.125 }, { "1/16T", 1.0 / 6.0 }, { "1/16", 0.25 },
-            { "1/8T",  1.0 / 3.0 }, { "1/16.", 0.375 }, { "1/8", 0.5 },
-            { "1/4T",  2.0 / 3.0 }, { "1/8.", 0.75 },   { "1/4", 1.0 }
-        }};
-
+        /** The tempo divisions a lane can run at.  The table itself lives in
+            StateManager.h beside the identifiers, because the sequencer engine
+            has to run at the beats this page prints the name of and neither
+            half may own the pairing alone. */
         juce::StringArray divisionNames()
         {
             juce::StringArray names;
-            for (const auto& d : divisions)
+            for (const auto& d : seq::divisions)
                 names.add (d.name);
             return names;
         }
@@ -88,12 +83,12 @@ namespace nacar::ui
 
         int getLength() const
         {
-            return juce::jlimit (1, 16, (int) tree.getProperty (seqIds::laneLength, 16));
+            return juce::jlimit (1, 16, (int) tree.getProperty (ids::laneLength, 16));
         }
 
         float valueAt (int step) const
         {
-            const auto packed = tree.getProperty (seqIds::laneValues).toString();
+            const auto packed = tree.getProperty (ids::laneValues).toString();
             const auto parts = juce::StringArray::fromTokens (packed, ",", "");
 
             return juce::isPositiveAndBelow (step, parts.size())
@@ -103,7 +98,7 @@ namespace nacar::ui
 
         bool gateAt (int step) const
         {
-            const auto mask = tree.getProperty (seqIds::laneGates).toString();
+            const auto mask = tree.getProperty (ids::laneGates).toString();
             return juce::isPositiveAndBelow (step, mask.length()) && mask[step] == '1';
         }
 
@@ -113,7 +108,7 @@ namespace nacar::ui
             previewWell (g, b);
 
             const int length = getLength();
-            const bool enabled = (bool) tree.getProperty (seqIds::laneEnabled, true);
+            const bool enabled = (bool) tree.getProperty (ids::laneEnabled, true);
 
             for (int s = 0; s < 16; ++s)
             {
@@ -262,13 +257,13 @@ namespace nacar::ui
                 return;
 
             auto parts = juce::StringArray::fromTokens (
-                tree.getProperty (seqIds::laneValues).toString(), ",", "");
+                tree.getProperty (ids::laneValues).toString(), ",", "");
 
             while (parts.size() < 16)
                 parts.add ("0.5");
 
             parts.set (step, juce::String (juce::jlimit (0.0f, 1.0f, value), 3));
-            tree.setProperty (seqIds::laneValues, parts.joinIntoString (","), nullptr);
+            tree.setProperty (ids::laneValues, parts.joinIntoString (","), nullptr);
             repaint();
         }
 
@@ -277,13 +272,13 @@ namespace nacar::ui
             if (! tree.isValid())
                 return;
 
-            auto mask = tree.getProperty (seqIds::laneGates).toString();
+            auto mask = tree.getProperty (ids::laneGates).toString();
 
             while (mask.length() < 16)
                 mask += "0";
 
             mask = mask.substring (0, step) + (on ? "1" : "0") + mask.substring (step + 1);
-            tree.setProperty (seqIds::laneGates, mask, nullptr);
+            tree.setProperty (ids::laneGates, mask, nullptr);
             repaint();
         }
 
@@ -318,8 +313,8 @@ namespace nacar::ui
 
             auto* target = new PillButton ("NO TARGET", PillButton::Style::ceramic);
             target->setTextSize (7.5f, 0.10f);
-            target->setTooltip ("Which parameter this lane will drive.\n"
-                                "Stored now; read by the trigger engine when it lands.");
+            target->setTooltip ("Which parameter this lane drives.\n"
+                                "A step is absolute: 0..1 across this parameter's range.");
             target->onClick = [this, i] { chooseTarget (i); };
             extras.add (target);
             addAndMakeVisible (target);
@@ -327,18 +322,20 @@ namespace nacar::ui
 
             auto* length = new PillButton ("16", PillButton::Style::ceramic);
             length->setTextSize (7.5f, 0.10f);
-            length->setTooltip ("Steps per cycle.");
+            length->setTooltip ("Steps per cycle. Lanes of different lengths drift\n"
+                                "against each other and realign at their common multiple.");
             length->onClick = [this, i] { chooseLength (i); };
             extras.add (length);
             addAndMakeVisible (length);
             lane.length = length;
 
             auto* enable = new ToggleSwitch (ToggleSwitch::Size::small);
-            enable->setTooltip ("Enable this lane.");
+            enable->setTooltip ("Enable this lane. Off, it writes nothing at all\n"
+                                "and its target goes back to the knob.");
             enable->onToggle = [this, i] (bool on)
             {
                 if (lanes[i].tree.isValid())
-                    lanes[i].tree.setProperty (seqIds::laneEnabled, on, nullptr);
+                    lanes[i].tree.setProperty (ids::laneEnabled, on, nullptr);
 
                 if (lanes[i].editor != nullptr)
                     lanes[i].editor->repaint();
@@ -350,13 +347,12 @@ namespace nacar::ui
 
         previewButton = new PillButton ("PREVIEW", PillButton::Style::ceramic);
         previewButton->setTextSize (8.0f, 0.14f);
-        previewButton->setTooltip ("Runs the playhead so a pattern can be read.\n"
-                                   "An editing aid. It does not modulate anything.");
+        previewButton->setTooltip ("Shows the playhead: where the sequencer actually is.\n"
+                                   "The lanes run whether this is on or off.");
         previewButton->onClick = [this]
         {
             previewRunning = ! previewRunning;
             previewButton->setSelected (previewRunning);
-            previewStartMs = juce::Time::getMillisecondCounterHiRes();
 
             for (auto& lane : lanes)
                 if (lane.editor != nullptr)
@@ -367,7 +363,8 @@ namespace nacar::ui
 
         divisionButton = new PillButton ("1/16", PillButton::Style::ceramic);
         divisionButton->setTextSize (8.0f, 0.14f);
-        divisionButton->setTooltip ("Step length against the host tempo.");
+        divisionButton->setTooltip ("Step length against the host tempo.\n"
+                                    "Shared by all four lanes.");
         divisionButton->onClick = [this] { chooseDivision(); };
         extras.add (divisionButton);
         addAndMakeVisible (divisionButton);
@@ -382,20 +379,20 @@ namespace nacar::ui
     void SeqPage::fetchTree()
     {
         auto& session = processor.getStateManager();
-        seqTree = session.group (seqIds::SEQUENCER);
+        seqTree = session.group (ids::SEQUENCER);
 
-        if (! seqTree.hasProperty (seqIds::seqDivision))
-            seqTree.setProperty (seqIds::seqDivision, 2, nullptr);   // 1/16
+        if (! seqTree.hasProperty (ids::seqDivision))
+            seqTree.setProperty (ids::seqDivision, 2, nullptr);   // 1/16
 
         while (seqTree.getNumChildren() < numLanes)
         {
-            juce::ValueTree lane (seqIds::SEQLANE);
+            juce::ValueTree lane (ids::SEQLANE);
             const int index = seqTree.getNumChildren();
 
-            lane.setProperty (seqIds::laneName, defaultLaneName (index), nullptr);
-            lane.setProperty (seqIds::laneTarget, "", nullptr);
-            lane.setProperty (seqIds::laneEnabled, index == 0, nullptr);
-            lane.setProperty (seqIds::laneLength, 16, nullptr);
+            lane.setProperty (ids::laneName, defaultLaneName (index), nullptr);
+            lane.setProperty (ids::laneTarget, "", nullptr);
+            lane.setProperty (ids::laneEnabled, index == 0, nullptr);
+            lane.setProperty (ids::laneLength, 16, nullptr);
 
             juce::StringArray values;
             juce::String gates;
@@ -406,8 +403,8 @@ namespace nacar::ui
                 gates += "0";
             }
 
-            lane.setProperty (seqIds::laneValues, values.joinIntoString (","), nullptr);
-            lane.setProperty (seqIds::laneGates, gates, nullptr);
+            lane.setProperty (ids::laneValues, values.joinIntoString (","), nullptr);
+            lane.setProperty (ids::laneGates, gates, nullptr);
 
             seqTree.addChild (lane, -1, nullptr);
         }
@@ -430,7 +427,7 @@ namespace nacar::ui
 
             if (lane.target != nullptr)
             {
-                const auto id = lane.tree.getProperty (seqIds::laneTarget).toString();
+                const auto id = lane.tree.getProperty (ids::laneTarget).toString();
                 const auto name = parameterDisplayName (id);
 
                 if (lane.target->getButtonText() != name)
@@ -441,24 +438,24 @@ namespace nacar::ui
 
             if (lane.length != nullptr)
             {
-                const juce::String n ((int) lane.tree.getProperty (seqIds::laneLength, 16));
+                const juce::String n ((int) lane.tree.getProperty (ids::laneLength, 16));
 
                 if (lane.length->getButtonText() != n)
                     lane.length->setButtonText (n);
             }
 
             if (lane.enable != nullptr)
-                lane.enable->setToggleState ((bool) lane.tree.getProperty (seqIds::laneEnabled, false),
+                lane.enable->setToggleState ((bool) lane.tree.getProperty (ids::laneEnabled, false),
                                              juce::dontSendNotification);
         }
 
         if (divisionButton != nullptr)
         {
-            const int d = juce::jlimit (0, (int) divisions.size() - 1,
-                                        (int) seqTree.getProperty (seqIds::seqDivision, 2));
+            const int d = juce::jlimit (0, seq::numDivisions - 1,
+                                        (int) seqTree.getProperty (ids::seqDivision, 2));
 
-            if (divisionButton->getButtonText() != divisions[(size_t) d].name)
-                divisionButton->setButtonText (divisions[(size_t) d].name);
+            if (divisionButton->getButtonText() != seq::divisions[(size_t) d].name)
+                divisionButton->setButtonText (seq::divisions[(size_t) d].name);
         }
     }
 
@@ -467,7 +464,7 @@ namespace nacar::ui
         if (! juce::isPositiveAndBelow (laneIndex, numLanes) || ! lanes[laneIndex].tree.isValid())
             return;
 
-        const auto current = lanes[laneIndex].tree.getProperty (seqIds::laneTarget).toString();
+        const auto current = lanes[laneIndex].tree.getProperty (ids::laneTarget).toString();
 
         juce::PopupMenu menu;
         buildParameterMenu (menu, current);
@@ -480,7 +477,7 @@ namespace nacar::ui
                                     return;
 
                                 lanes[laneIndex].tree.setProperty (
-                                    seqIds::laneTarget, parameterMenuResult (result), nullptr);
+                                    ids::laneTarget, parameterMenuResult (result), nullptr);
                                 refreshLanes();
                             });
     }
@@ -490,7 +487,7 @@ namespace nacar::ui
         if (! juce::isPositiveAndBelow (laneIndex, numLanes) || ! lanes[laneIndex].tree.isValid())
             return;
 
-        const int current = (int) lanes[laneIndex].tree.getProperty (seqIds::laneLength, 16);
+        const int current = (int) lanes[laneIndex].tree.getProperty (ids::laneLength, 16);
 
         juce::PopupMenu menu;
         for (int n = 1; n <= 16; ++n)
@@ -503,7 +500,7 @@ namespace nacar::ui
                                 if (result <= 0)
                                     return;
 
-                                lanes[laneIndex].tree.setProperty (seqIds::laneLength, result, nullptr);
+                                lanes[laneIndex].tree.setProperty (ids::laneLength, result, nullptr);
                                 refreshLanes();
 
                                 if (lanes[laneIndex].editor != nullptr)
@@ -513,8 +510,8 @@ namespace nacar::ui
 
     void SeqPage::chooseDivision()
     {
-        const int current = juce::jlimit (0, (int) divisions.size() - 1,
-                                          (int) seqTree.getProperty (seqIds::seqDivision, 2));
+        const int current = juce::jlimit (0, seq::numDivisions - 1,
+                                          (int) seqTree.getProperty (ids::seqDivision, 2));
 
         juce::PopupMenu menu;
         const auto names = divisionNames();
@@ -528,19 +525,9 @@ namespace nacar::ui
                                 if (result <= 0)
                                     return;
 
-                                seqTree.setProperty (seqIds::seqDivision, result - 1, nullptr);
+                                seqTree.setProperty (ids::seqDivision, result - 1, nullptr);
                                 refreshLanes();
                             });
-    }
-
-    double SeqPage::stepSeconds() const
-    {
-        const int d = juce::jlimit (0, (int) divisions.size() - 1,
-                                    (int) seqTree.getProperty (seqIds::seqDivision, 2));
-
-        const double bpm = juce::jlimit (20.0, 300.0, processor.getHostBpm());
-
-        return divisions[(size_t) d].beats * 60.0 / bpm;
     }
 
     // -----------------------------------------------------------------------
@@ -551,21 +538,13 @@ namespace nacar::ui
         if (! previewRunning)
             return;
 
-        const double elapsed = (juce::Time::getMillisecondCounterHiRes() - previewStartMs) * 0.001;
-        const double step = juce::jmax (0.01, stepSeconds());
-
+        // The engine's own position, not a clock of this page's.  A playhead
+        // that ran on the interface timer would agree with the audio only by
+        // coincidence, and would disagree the moment the host looped - which is
+        // exactly when a user is looking at it.  One relaxed load per lane.
         for (int i = 0; i < numLanes; ++i)
-        {
-            auto& lane = lanes[i];
-
-            if (lane.editor == nullptr)
-                continue;
-
-            const int length = lane.editor->getLength();
-            lane.editor->setPlayhead ((int) std::fmod (elapsed / step, (double) length));
-        }
-
-        playhead = lanes[0].editor != nullptr ? 0 : 0;
+            if (lanes[i].editor != nullptr)
+                lanes[i].editor->setPlayhead (processor.getSequencerStep (i));
     }
 
     // -----------------------------------------------------------------------
@@ -584,7 +563,7 @@ namespace nacar::ui
                 continue;
 
             const auto name = lane.tree.isValid()
-                                  ? lane.tree.getProperty (seqIds::laneName).toString()
+                                  ? lane.tree.getProperty (ids::laneName).toString()
                                   : juce::String (defaultLaneName (i));
 
             text (g, name, { (float) lane.header.getX() + 34.0f,
@@ -592,11 +571,13 @@ namespace nacar::ui
                   8.0f, 0.16f, ink());
         }
 
-        // The honesty line.  It is on the page, not only in the source, because
-        // a step editor that looks finished and does nothing is exactly the
-        // kind of thing the specification forbids shipping unannounced.
+        // The line that used to say there was no trigger engine.  There is one
+        // now, so it says what the sequencer actually does instead: a page that
+        // lies in the user's favour is no better than one that lies against
+        // them.  A step is an absolute position, not an offset from the knob,
+        // and that is the one thing about this page that is not obvious.
         const auto note = transportBounds.toFloat();
-        text (g, "EDITS AND SAVES STEP DATA  \xc2\xb7  NO TRIGGER ENGINE IN THIS BUILD",
+        text (g, "LANES DRIVE THEIR TARGETS  \xc2\xb7  A STEP IS ABSOLUTE, 0-100% OF RANGE",
               { note.getRight() - page::sectionPad, note.getBottom() - page::sectionPad },
               page::noteSize, 0.14f, inkFaint(),
               juce::Justification::right, note.getWidth() - page::sectionPad * 2.0f);

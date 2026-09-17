@@ -1,6 +1,9 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+
+#include <array>
+
 #include "ParameterRegistry.h"
 
 namespace nacar
@@ -119,7 +122,68 @@ namespace nacar
         NACAR_ID (modDepth)
         NACAR_ID (modEnabled)
 
+        // -- the step sequencer, specification section 129 -------------------
+        //
+        //  SESSION holds one SEQUENCER child, which holds one SEQLANE per lane.
+        //  These lived in Source/UI/Pages/SeqPage.h while the page was the only
+        //  thing that could see them; the trigger engine is in Source/Audio,
+        //  which must not include Source/UI, so they moved here to the rest of
+        //  the session schema rather than being declared twice.
+        //
+        //  A lane packs its sixteen step values into one comma-separated string
+        //  and its sixteen gates into a sixteen-character mask.  Packing a short
+        //  list into a single property is already the house pattern - see
+        //  transientPositions - and it keeps a lane small enough to live inside
+        //  a preset.
+        NACAR_ID (SEQUENCER)
+        NACAR_ID (SEQLANE)
+        NACAR_ID (seqDivision)      // index into seq::divisions
+        NACAR_ID (laneName)
+        NACAR_ID (laneTarget)       // permanent parameter string ID
+        NACAR_ID (laneEnabled)
+        NACAR_ID (laneLength)       // 1..16 steps per cycle
+        NACAR_ID (laneValues)       // "0.500,0.250,..." x16
+        NACAR_ID (laneGates)        // "1011..." x16
+
         #undef NACAR_ID
+    }
+
+    /**
+        What a stored `seqDivision` index MEANS.
+
+        The SEQ page draws the name and the sequencer engine runs at the beats,
+        so the two halves of one contract are kept in one table where they
+        cannot disagree - and in a header both Source/UI and Source/Audio may
+        include, which is the whole reason it is not in the page.
+    */
+    namespace seq
+    {
+        struct Division
+        {
+            const char* name;
+            double      beats;
+        };
+
+        inline constexpr std::array<Division, 9> divisions {{
+            { "1/32",  0.125 },     { "1/16T", 1.0 / 6.0 }, { "1/16",  0.25 },
+            { "1/8T",  1.0 / 3.0 }, { "1/16.", 0.375 },     { "1/8",   0.5 },
+            { "1/4T",  2.0 / 3.0 }, { "1/8.",  0.75 },      { "1/4",   1.0 }
+        }};
+
+        inline constexpr int numDivisions = (int) divisions.size();
+        inline constexpr int defaultDivision = 2;       ///< 1/16
+
+        /** Four lanes of sixteen steps.  The page draws this many and the
+            engine advances this many; neither may decide it alone. */
+        inline constexpr int numLanes = 4;
+        inline constexpr int numSteps = 16;
+
+        /** Beats per step for a stored index, clamped rather than trusted: the
+            index comes out of a session file and may be from any build. */
+        inline double beatsForDivision (int index) noexcept
+        {
+            return divisions[(size_t) juce::jlimit (0, numDivisions - 1, index)].beats;
+        }
     }
 
     class StateManager

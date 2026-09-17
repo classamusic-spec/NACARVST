@@ -4,51 +4,31 @@
 
 namespace nacar::ui
 {
-    /**
-        The sequencer's corner of the session tree.
-
-        StateManager.h is frozen and has no sequencer identifiers, so they are
-        declared here instead, following the same convention: the identifier's
-        name and its string are the same word, and they live under SESSION as a
-        SEQUENCER child holding one SEQLANE per lane.
-
-        A lane stores its sixteen step values as one comma-separated string and
-        its sixteen gates as a sixteen-character mask.  Packing a short list
-        into a single property is already the house pattern - see
-        ids::transientPositions - and it keeps the tree small enough to live
-        inside a preset.
-    */
-    namespace seqIds
-    {
-        inline const juce::Identifier SEQUENCER   ("SEQUENCER");
-        inline const juce::Identifier SEQLANE     ("SEQLANE");
-
-        inline const juce::Identifier seqDivision ("seqDivision");   // index into divisionNames()
-
-        inline const juce::Identifier laneName    ("laneName");
-        inline const juce::Identifier laneTarget  ("laneTarget");    // permanent parameter string ID
-        inline const juce::Identifier laneEnabled ("laneEnabled");
-        inline const juce::Identifier laneLength  ("laneLength");    // 1..16 steps per cycle
-        inline const juce::Identifier laneValues  ("laneValues");    // "0.50,0.25,..." x16
-        inline const juce::Identifier laneGates   ("laneGates");     // "1011..." x16
-    }
-
     /** One lane's step well.  Defined in SeqPage.cpp. */
     class SeqLaneEditor;
 
     /**
-        SEQ - the step sequencer foundation (master spec section 129).
+        SEQ - the step sequencer (master spec section 129).
 
-        THIS PAGE EDITS AND PERSISTS STEP DATA.  NOTHING READS IT YET.
+        THE IDENTIFIERS USED TO LIVE HERE.  They are now in
+        Source/Plugin/StateManager.h with the rest of the session schema,
+        because Source/Audio must not include Source/UI and the trigger engine
+        needs the same names this page writes.  There is one copy: `ids::`.
+        The division table moved with them, as `seq::divisions`, so the name
+        this page prints and the beats the engine runs at cannot disagree.
 
-        The trigger engine - what actually advances a lane against the host
-        clock and applies a step to its target - is Phase 29-adjacent work and
-        is deliberately not attempted here: the master spec is explicit that
-        sequencing must not delay core sound quality.  What this page does is
-        real: four lanes of sixteen steps, each with a value, a gate, a length
-        and a target parameter, all saved with the session and the preset.  The
-        PREVIEW playhead is an editing aid driven by the UI clock and the host
-        tempo; it is not the transport and it is labelled as such on the page.
+        Every control on this page is live.  The step well edits values and
+        gates, the target pill chooses a parameter by its permanent string ID,
+        the length pill sets 1..16 steps so lanes of different lengths drift
+        against each other, the enable toggle decides whether a lane writes
+        anything at all, and the division pill sets the shared step length
+        against the host tempo.  SequencerEngine advances all of it and
+        NacarEngine applies it through the modulation overlay.
+
+        PREVIEW shows the playhead.  It no longer runs a clock of its own: the
+        step it draws is the step the audio thread is on, read back from the
+        engine.  The lanes advance whether or not it is switched on - it is a
+        display toggle, not a transport.
     */
     class SeqPage : public PageSurface
     {
@@ -67,7 +47,6 @@ namespace nacar::ui
         void chooseTarget (int lane);
         void chooseLength (int lane);
         void chooseDivision();
-        double stepSeconds() const;
 
         static constexpr int numLanes = 4;
         static constexpr int numSteps = 16;
@@ -92,9 +71,7 @@ namespace nacar::ui
         PillButton* previewButton  = nullptr;
         PillButton* divisionButton = nullptr;
 
-        bool   previewRunning = false;
-        int    playhead       = 0;
-        double previewStartMs = 0.0;
+        bool previewRunning = false;
 
         juce::Rectangle<int> lanesBounds, transportBounds;
 

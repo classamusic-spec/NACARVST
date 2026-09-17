@@ -191,6 +191,17 @@ namespace nacar
 
         static juce::String fileExtension()  { return ".nacarpreset"; }
 
+        /** The file name a preset of this name is saved as.
+
+            It exists because a caller has to know, BEFORE it saves, which file
+            a name would land on - two names can derive one file, since
+            createLegalFileName DROPS the characters a path cannot carry rather
+            than substituting for them, so "Bass/Lead" and "BassLead" are the
+            same file and one would silently replace the other. The browser was
+            mirroring this one expression to answer that; one copy is better
+            than two that must be changed together. */
+        static juce::String fileNameFor (const juce::String& presetName);
+
         /** Stamped into every file this build writes.
 
             The reader does not branch on it and does not need to, because the

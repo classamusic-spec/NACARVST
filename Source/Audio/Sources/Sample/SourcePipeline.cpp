@@ -112,6 +112,29 @@ namespace nacar
         return true;
     }
 
+    bool SourcePipeline::print (const PrintEngine::Snapshot& snapshot,
+                                const PrintEngine::Settings& settings,
+                                juce::String& failure)
+    {
+        if (printBusy.load (std::memory_order_relaxed))
+        {
+            failure = "A PRINT IS ALREADY RUNNING";
+            return false;
+        }
+
+        // Unlike mutate(), this needs no source: printing is how a source comes
+        // into existence. It is the answer to NOTHING TO MUTATE.
+        printBusy.store (true, std::memory_order_relaxed);
+
+        worker.addJob ([this, snapshot, settings]
+        {
+            printPending = PrintEngine::render (snapshot, settings);
+            printReady.store (true, std::memory_order_release);
+        });
+
+        return true;
+    }
+
     void SourcePipeline::poll()
     {
         decoder.poll();
@@ -123,6 +146,29 @@ namespace nacar
 
             if (onAnalysisChanged != nullptr)
                 onAnalysisChanged (current);
+        }
+
+        if (printReady.load (std::memory_order_acquire))
+        {
+            const auto result = printPending;
+
+            printPending = PrintEngine::Result();
+            printReady.store (false, std::memory_order_relaxed);
+            printBusy.store (false, std::memory_order_relaxed);
+
+            // A print BECOMES the sample, exactly as a mutation does: the thing
+            // you just rendered is the thing you are now playing, and the thing
+            // MUTATE will work on.
+            if (result.ok && result.audio != nullptr && ! result.audio->isEmpty())
+            {
+                sampleSlot.publish (result.audio);
+
+                clearAnalysis();
+                startAnalysis();
+            }
+
+            if (onPrintFinished != nullptr)
+                onPrintFinished (result);
         }
 
         if (mutationReady.load (std::memory_order_acquire))

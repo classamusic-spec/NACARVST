@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../Presets/PresetManager.h"
+#include "../Audio/Print/PrintEngine.h"
+#include "../Audio/Print/InstrumentBuilder.h"
 
 namespace nacar
 {
@@ -52,6 +54,33 @@ namespace nacar
 
             if (onAnalysisFinished != nullptr)
                 onAnalysisFinished();
+        };
+
+        pipeline.onPrintFinished = [this] (const PrintEngine::Result& result)
+        {
+            if (result.ok && result.audio != nullptr)
+            {
+                // A print is written to disk before it is described, because
+                // the SAMPLE branch stores a PATH: the audio is not in the
+                // host's blob, so a session that named a print it had not
+                // written would restore to silence.
+                // Already written, by the render, before it was published.
+                const auto file = result.audio->file;
+
+                const int index = recordGeneration (file, result.audio->displayName);
+
+                auto sample = stateManager.group (ids::SAMPLE);
+
+                sample.setProperty (ids::sampleFile,          file.getFullPathName(), nullptr);
+                sample.setProperty (ids::sampleDisplayName,
+                                    "PRINT " + juce::String (index + 1), nullptr);
+                sample.setProperty (ids::sampleRate,          result.audio->sourceRate, nullptr);
+                sample.setProperty (ids::sampleLengthSamples, result.audio->lengthSamples(), nullptr);
+                sample.setProperty (ids::sampleChannels,      result.audio->numChannels(), nullptr);
+            }
+
+            if (onPrintFinished != nullptr)
+                onPrintFinished (result);
         };
 
         pipeline.onMutationFinished = [this] (const mutation::Result& result)
@@ -164,6 +193,74 @@ namespace nacar
         return pipeline.mutate (recipe, context, failure);
     }
 
+    // -----------------------------------------------------------------------
+    //  Print and generations
+    // -----------------------------------------------------------------------
+    bool NacarProcessor::requestPrint (juce::String& failure)
+    {
+        // Captured HERE, on the message thread, and not inside the render: a
+        // print is of one state, and a knob moved while the worker runs must
+        // not land halfway through the file.
+        const auto snapshot = PrintEngine::capture (registry, stateManager.session());
+
+        PrintEngine::Settings settings;
+        settings.sampleRate = currentSampleRate;
+        settings.blockSize  = currentBlockSize;
+        settings.bpm        = hostBpm.load (std::memory_order_relaxed);
+
+        // The note the analyser will later call this sample's root, so a print
+        // played back by MAKE INSTRUMENT sits at the pitch it was rendered at.
+        settings.midiNote = 60;
+
+        const auto name = stateManager.group (ids::PRESET)
+                              .getProperty (ids::presetName).toString();
+
+        settings.baseName = name.isNotEmpty() ? name : juce::String ("PRINT");
+
+        return pipeline.print (snapshot, settings, failure);
+    }
+
+    int NacarProcessor::recordGeneration (const juce::File& file, const juce::String& displayName)
+    {
+        return InstrumentBuilder::recordGeneration (stateManager, file, displayName);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Make instrument
+    // -----------------------------------------------------------------------
+    bool NacarProcessor::makeInstrument (juce::String& failure)
+    {
+        auto source = pipeline.slot().acquire();
+
+        if (source == nullptr || source->isEmpty())
+        {
+            failure = "NOTHING TO MAKE AN INSTRUMENT FROM";
+            return false;
+        }
+
+        if (pipeline.isMutating() || pipeline.isPrinting() || pipeline.isLoading())
+        {
+            failure = "STILL WORKING";
+            return false;
+        }
+
+        const auto result = InstrumentBuilder::build (*source, pipeline.analysis(), registry,
+                                                      stateManager,
+                                                      stateManager.group (ids::PRESET)
+                                                          .getProperty (ids::presetName).toString());
+
+        if (! result.ok)
+        {
+            failure = result.failure;
+            return false;
+        }
+
+        if (onInstrumentMade != nullptr)
+            onInstrumentMade (result.name);
+
+        return true;
+    }
+
     void NacarProcessor::valueTreePropertyChanged (juce::ValueTree& tree,
                                                    const juce::Identifier& property)
     {
@@ -172,7 +269,21 @@ namespace nacar
         // rate, length and channel count the decoder writes back below do not
         // start a second decode.
         if (tree.hasType (ids::SAMPLE) && property == ids::sampleFile)
-            startSampleLoad (juce::File (tree.getProperty (ids::sampleFile).toString()));
+        {
+            const juce::File named (tree.getProperty (ids::sampleFile).toString());
+
+            // A print and a MAKE INSTRUMENT both write the file first and then
+            // name it here, so by the time this fires the slot is already
+            // holding exactly that audio. Decoding it back off the disk would
+            // be correct and completely wasteful - and it would empty the slot
+            // for as long as the decode took, which the viewport would show.
+            const auto held = pipeline.slot().acquire();
+            const bool alreadyLoaded = held != nullptr && ! held->isEmpty()
+                                       && held->file == named && named.existsAsFile();
+
+            if (! alreadyLoaded)
+                startSampleLoad (named);
+        }
 
         if (tree.hasType (ids::FXCHAIN)
             && (property == ids::fxOrder || property.toString() == "fxBypass"))

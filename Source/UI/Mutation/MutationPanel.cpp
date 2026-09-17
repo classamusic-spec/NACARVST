@@ -323,12 +323,16 @@ namespace nacar::ui
         printButton.setTextSize (actionTextSize, actionTextTrack);
         printButton.setCornerRadius (actionCorner);
         printButton.setIcon (icons::Icon::print, actionIconRatio);
-        printButton.setTooltip ("Print\nRenders the current mutation down to a new sample. "
-                                "Not available yet - there is no render engine until phase 22.");
+        printButton.setTooltip ("Print\nRenders the instrument as it stands - the synth, Memory, "
+                                "the whole chain - down to a sample you can then mutate.");
         printButton.onClick = [this]
         {
-            // Deliberately inert on the audio side: there is nothing to render.
-            setStatus ("PRINT" + dash() + "AWAITING RENDER ENGINE (PHASE 22)");
+            juce::String failure;
+
+            if (processor.requestPrint (failure))
+                setStatus ("PRINT" + dash() + "RENDERING");
+            else
+                setStatus ("PRINT" + dash() + failure.toUpperCase());
         };
         addAndMakeVisible (printButton);
 
@@ -336,12 +340,17 @@ namespace nacar::ui
         makeInstrumentButton.setCornerRadius (actionCorner);
         makeInstrumentButton.setIcon (icons::Icon::makeInstrument, actionIconRatio);
         makeInstrumentButton.setTrailingIcon (icons::Icon::chevronRight);
-        makeInstrumentButton.setTooltip ("Make Instrument\nBuilds a playable multisampled "
-                                         "instrument from the mutation. Not available yet - "
-                                         "it needs the mutation engine from phase 21.");
+        makeInstrumentButton.setTooltip ("Make Instrument\nCommits what you are hearing - a print "
+                                         "or a mutation - as the instrument's playable source, "
+                                         "and starts the next generation.");
         makeInstrumentButton.onClick = [this]
         {
-            setStatus ("MAKE INSTRUMENT" + dash() + "AWAITING THE INSTRUMENT BUILDER (PHASE 23)");
+            juce::String failure;
+
+            if (processor.makeInstrument (failure))
+                setStatus ("MAKE INSTRUMENT" + dash() + "PLAYABLE");
+            else
+                setStatus ("MAKE INSTRUMENT" + dash() + failure.toUpperCase());
         };
         addAndMakeVisible (makeInstrumentButton);
 
@@ -379,12 +388,53 @@ namespace nacar::ui
         //  thing a reviewer reads is the truth rather than a blank line.
         const int storedSeed = (int) mutationTree().getProperty (ids::currentSeed, 0);
 
+        // Until this, MUTATE said RENDERING and never said anything else: the
+        // work finished on a worker thread and nothing was listening. These
+        // three are what turn the status line from a promise into a report.
+        processor.onPrintFinished = [this] (const PrintEngine::Result& result)
+        {
+            setStatus ("PRINT" + dash()
+                       + (result.ok ? juce::String ("READY TO MUTATE")
+                                    : result.failure.toUpperCase()));
+        };
+
+        processor.onMutationFinished = [this] (const mutation::Result& result)
+        {
+            if (! result.ok)
+            {
+                setStatus ("MUTATE" + dash() + result.failure.toUpperCase());
+                return;
+            }
+
+            // The engine's own account of what it did, which is more use than
+            // the word DONE - a user who does not like the result wants to know
+            // what was applied to it.
+            setStatus ("MUTATE" + dash()
+                       + (result.operations.isEmpty()
+                              ? juce::String ("DONE")
+                              : result.operations.joinIntoString (" / ").toUpperCase()));
+        };
+
+        processor.onInstrumentMade = [this] (const juce::String& name)
+        {
+            setStatus ("MAKE INSTRUMENT" + dash() + name.toUpperCase() + " IS PLAYABLE");
+        };
+
         setStatus (storedSeed > 0
                        ? "SEED " + juce::String (storedSeed) + sep() + "READY"
                        : juce::String ("NO MUTATION YET") + sep() + "READY");
     }
 
-    MutationPanel::~MutationPanel() = default;
+    MutationPanel::~MutationPanel()
+    {
+        // The processor outlives this panel - a window can be closed while the
+        // plugin keeps playing - so the callbacks below have to be given back.
+        // A lambda capturing `this` that survived would be called on a panel
+        // that no longer exists the next time a render finished.
+        processor.onPrintFinished = nullptr;
+        processor.onMutationFinished = nullptr;
+        processor.onInstrumentMade = nullptr;
+    }
 
     // -----------------------------------------------------------------------
     //  Painting

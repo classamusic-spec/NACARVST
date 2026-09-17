@@ -183,6 +183,22 @@ namespace nacar
         }
     }
 
+    void ParameterRegistry::attachSnapshot (std::array<std::atomic<float>, numParameters>& storage) noexcept
+    {
+        // Deliberately leaves `apvts` and `params` null: see the header. The
+        // UI-writing methods all guard on a null RangedAudioParameter already,
+        // so they no-op rather than crash if one is ever reached from here -
+        // but reaching one means somebody is editing a snapshot, which is a
+        // mistake this cannot make safe.
+        apvts = nullptr;
+
+        for (int i = 0; i < numParameters; ++i)
+        {
+            values[(size_t) i] = &storage[(size_t) i];
+            params[(size_t) i] = nullptr;
+        }
+    }
+
     juce::RangedAudioParameter* ParameterRegistry::parameter (PID p) const noexcept
     {
         return params[(size_t) p];

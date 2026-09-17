@@ -9,6 +9,7 @@
 #include "../../../Analysis/AnalysisResult.h"
 #include "../../../Mutation/MutationRecipe.h"
 #include "../../../Harmony/Harmony.h"
+#include "../../Print/PrintEngine.h"
 
 namespace nacar
 {
@@ -70,6 +71,21 @@ namespace nacar
             exist. */
         bool mutate (const mutation::Recipe&, const harmony::Context&, juce::String& failure);
 
+        /** Renders the instrument's own output into the slot, so a patch you
+            have just designed becomes audio you can mutate.
+
+            The snapshot is taken by the CALLER, on the message thread, before
+            this is called: a print must be of one state, and the pipeline
+            cannot see the session tree the fx order and matrix come from.
+            Returns false with `failure` set when one is already running. */
+        bool print (const PrintEngine::Snapshot&, const PrintEngine::Settings&,
+                    juce::String& failure);
+
+        bool isPrinting() const noexcept { return printBusy.load (std::memory_order_relaxed); }
+
+        /** A print finished. A successful one is already in the slot. */
+        std::function<void (const PrintEngine::Result&)> onPrintFinished;
+
         bool isMutating() const noexcept { return mutationBusy.load (std::memory_order_relaxed); }
         bool isLoading() const noexcept  { return decoder.isBusy(); }
 
@@ -100,12 +116,15 @@ namespace nacar
         /** Written by the worker, read by the owner once the matching flag
             reads true. The release/acquire pairing on the flag is what makes
             that safe; there is no lock and none is needed. */
-        AnalysisResult   analysisPending;
-        mutation::Result mutationPending;
+        AnalysisResult     analysisPending;
+        mutation::Result   mutationPending;
+        PrintEngine::Result printPending;
 
         std::atomic<bool> analysisReady { false };
         std::atomic<bool> mutationReady { false };
         std::atomic<bool> mutationBusy  { false };
+        std::atomic<bool> printReady    { false };
+        std::atomic<bool> printBusy     { false };
 
         /** Bumped whenever a new buffer is published. A job that finishes
             holding a stale generation is discarded: the user has moved on, and

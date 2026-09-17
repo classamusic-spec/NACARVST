@@ -65,6 +65,11 @@ namespace nacar
         refresh();
     }
 
+    juce::String PresetManager::fileNameFor (const juce::String& presetName)
+    {
+        return juce::File::createLegalFileName (presetName.trim()) + fileExtension();
+    }
+
     juce::File PresetManager::userPresetDirectory()
     {
         auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
@@ -452,9 +457,7 @@ namespace nacar
         if (const auto matrix = state.session().getChildWithName (ids::MODMATRIX); matrix.isValid())
             tree.addChild (matrix.createCopy(), -1, nullptr);
 
-        const auto file = userPresetDirectory()
-                              .getChildFile (juce::File::createLegalFileName (trimmed)
-                                             + fileExtension());
+        const auto file = userPresetDirectory().getChildFile (fileNameFor (trimmed));
 
         if (auto xml = tree.createXml())
             if (! xml->writeTo (file, {}))

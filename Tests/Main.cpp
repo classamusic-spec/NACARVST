@@ -24,6 +24,8 @@
 #include "../Source/Audio/Modulation/ModulationEngine.h"
 #include "../Source/Presets/FactoryPresets.h"
 #include "../Source/Presets/PresetManager.h"
+#include "../Source/Audio/Print/PrintEngine.h"
+#include "../Source/Audio/Print/InstrumentBuilder.h"
 
 using namespace nacar;
 
@@ -5983,6 +5985,679 @@ public:
 };
 
 static VoiceEnvelopeTests voiceEnvelopeTests;
+
+
+// ===========================================================================
+//  PRINT
+//
+//  The instrument's premise is that a sound is given a history, broken apart
+//  and reconstructed. Every step after the first needs audio, and until PRINT
+//  existed the only audio the instrument could reach was a file somebody
+//  dropped on it - so MUTATE on a patch you had just designed refused with
+//  NOTHING TO MUTATE, correctly, and the second half of the instrument was
+//  unreachable from the first.
+//
+//  What is asserted here is that a print is of the patch: that it renders
+//  real audio, that the whole chain is in it and not just the voice core, and
+//  above all that it is of ONE state - the snapshot it was given, not whatever
+//  the registry happens to hold while the worker runs.
+// ===========================================================================
+class PrintTests : public juce::UnitTest
+{
+public:
+    PrintTests() : juce::UnitTest ("Print", "nacar") {}
+
+    static PrintEngine::Settings quickSettings()
+    {
+        PrintEngine::Settings s;
+        s.sampleRate = 48000.0;
+        s.blockSize  = 256;
+        s.holdSeconds = 0.35;
+        s.maxTailSeconds = 1.5;
+        s.baseName = {};        // no file: a unit test writes no audio to disk
+        return s;
+    }
+
+    static float peakOf (const SampleBuffer& b)
+    {
+        float peak = 0.0f;
+
+        for (int ch = 0; ch < b.numChannels(); ++ch)
+            peak = juce::jmax (peak, b.audio.getMagnitude (ch, 0, b.lengthSamples()));
+
+        return peak;
+    }
+
+    void runTest() override
+    {
+        beginTest ("a print of the default patch is real audio, finite and not silent");
+        {
+            TestHost host;
+            StateManager state (host.apvts);
+
+            const auto snapshot = PrintEngine::capture (host.registry, state.session());
+            const auto result = PrintEngine::render (snapshot, quickSettings());
+
+            expect (result.ok, "the render failed: " + result.failure);
+
+            if (! result.ok)
+                return;
+
+            expect (result.audio != nullptr, "a successful print carried no buffer");
+            expect (result.audio->lengthSamples() > 1000,
+                    "a print of " + juce::String (result.audio->lengthSamples()) + " samples");
+            expect (result.audio->numChannels() == 2, "a print should be stereo");
+
+            const float peak = peakOf (*result.audio);
+
+            expect (peak > 0.0001f, "the print is silent");
+            expect (peak <= 1.0f, "the print peaks at " + juce::String (peak));
+
+            for (int ch = 0; ch < result.audio->numChannels(); ++ch)
+            {
+                const auto* d = result.audio->audio.getReadPointer (ch);
+
+                for (int i = 0; i < result.audio->lengthSamples(); ++i)
+                    if (! std::isfinite (d[i]))
+                    {
+                        expect (false, "non-finite sample at " + juce::String (i));
+                        return;
+                    }
+            }
+
+            logMessage ("    printed " + juce::String (result.audio->lengthSamples())
+                        + " samples, peak " + juce::String (juce::Decibels::gainToDecibels (peak), 1)
+                        + " dBFS");
+
+            // The overview the viewport draws from has to exist, or a print
+            // would show as an empty field however loud it was.
+            expect (result.audio->peaks.numBuckets > 0, "the print has no peak overview");
+            expect (result.audio->peaks.numChannels == result.audio->numChannels(),
+                    "the overview and the audio disagree about channels");
+        }
+
+        beginTest ("a print is of the snapshot it was given, not of the live registry");
+        {
+            // The property the whole design rests on. The renderer is handed a
+            // snapshot; changing the registry afterwards - a user turning a
+            // knob while the worker runs - must not reach the audio.
+            TestHost host;
+            StateManager state (host.apvts);
+
+            host.registry.setFromUI (PID::filterCutoff, 400.0f);
+
+            const auto snapshot = PrintEngine::capture (host.registry, state.session());
+
+            // Move the live registry a long way AFTER the capture.
+            host.registry.setFromUI (PID::filterCutoff, 16000.0f);
+
+            const auto a = PrintEngine::render (snapshot, quickSettings());
+
+            // And render the same snapshot again, with the registry now
+            // somewhere else again. Both must be identical to each other.
+            host.registry.setFromUI (PID::filterCutoff, 60.0f);
+
+            const auto b = PrintEngine::render (snapshot, quickSettings());
+
+            expect (a.ok && b.ok, "a render failed");
+
+            if (! (a.ok && b.ok))
+                return;
+
+            expect (a.audio->lengthSamples() == b.audio->lengthSamples(),
+                    "two renders of one snapshot came out different lengths");
+
+            double worst = 0.0;
+
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const auto* x = a.audio->audio.getReadPointer (ch);
+                const auto* y = b.audio->audio.getReadPointer (ch);
+
+                for (int i = 0; i < juce::jmin (a.audio->lengthSamples(),
+                                                b.audio->lengthSamples()); ++i)
+                    worst = juce::jmax (worst, (double) std::abs (x[i] - y[i]));
+            }
+
+            expect (worst < 1.0e-9,
+                    "two renders of the same snapshot differ by " + juce::String (worst, 12)
+                        + " - something is reading the live registry");
+        }
+
+        beginTest ("the snapshot carries the patch: a different cutoff prints a different sound");
+        {
+            // The mirror of the test above. If nothing the user sets reached
+            // the render, the test above would pass trivially.
+            auto printAt = [this] (float cutoff)
+            {
+                TestHost host;
+                StateManager state (host.apvts);
+
+                host.registry.setFromUI (PID::filterCutoff, cutoff);
+
+                // Everything downstream of the filter that generates its own
+                // high frequencies is switched off, or the measurement is of
+                // saturation and reverb rather than of the cutoff. The first
+                // version of this test left them on, measured a 1.4x
+                // difference, and could not tell a working filter from a
+                // coincidence.
+                // The sub is a sine an octave down at a third of full level.
+                // Left in, its energy dominates the denominator of the
+                // brightness ratio and both prints read as near-sines whatever
+                // the cutoff is doing - which is exactly what the first two
+                // versions of this test measured.
+                host.registry.setFromUI (PID::subLevel, 0.0f);
+                host.registry.setFromUI (PID::oscBLevel, 0.0f);
+                host.registry.setFromUI (PID::macroWeight, 0.0f);
+                host.registry.setFromUI (PID::crushOn, 0.0f);
+                host.registry.setFromUI (PID::filter2On, 0.0f);
+
+                host.registry.setFromUI (PID::filterEnvAmount, 0.0f);
+                host.registry.setFromUI (PID::filterKeyTrack, 0.0f);
+                host.registry.setFromUI (PID::filterResonance, 0.0f);
+                host.registry.setFromUI (PID::postSaturation, 0.0f);
+                host.registry.setFromUI (PID::preFilterDrive, 0.0f);
+                host.registry.setFromUI (PID::filterDrive, 0.0f);
+                host.registry.setFromUI (PID::densityAmount, 0.0f);
+                host.registry.setFromUI (PID::bodyAmount, 0.0f);
+                host.registry.setFromUI (PID::macroCharacter, 0.0f);
+                host.registry.setFromUI (PID::macroMemory, 0.0f);
+                host.registry.setFromUI (PID::macroWorld, 0.0f);
+                host.registry.setFromUI (PID::spaceOn, 0.0f);
+                host.registry.setFromUI (PID::auraOn, 0.0f);
+                host.registry.setFromUI (PID::patinaOn, 0.0f);
+                host.registry.setFromUI (PID::retroOn, 0.0f);
+                host.registry.setFromUI (PID::fxFilterOn, 0.0f);
+
+                return PrintEngine::render (PrintEngine::capture (host.registry, state.session()),
+                                            quickSettings());
+            };
+
+            const auto dark   = printAt (300.0f);
+            const auto bright = printAt (14000.0f);
+
+            expect (dark.ok && bright.ok, "a render failed");
+
+            if (! (dark.ok && bright.ok))
+                return;
+
+            // Energy above 2 kHz as a fraction of the whole, measured rather
+            // than approximated. The first two versions of this test used the
+            // mean absolute first difference as a brightness proxy; on a
+            // signal with a strong fundamental that ratio barely moves however
+            // open the filter is, so it could not tell a working low-pass from
+            // a broken one. This can.
+            auto highFraction = [] (const SampleBuffer& b)
+            {
+                const int n = juce::jmin (b.lengthSamples(), 16384);
+                const auto* d = b.audio.getReadPointer (0);
+
+                double high = 0.0, total = 0.0;
+
+                for (double hz = 100.0; hz < 18000.0; hz *= 1.15)
+                {
+                    double re = 0.0, im = 0.0;
+
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const double w = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi
+                                                               * (double) i / (double) n);
+                        const double ph = 2.0 * juce::MathConstants<double>::pi * hz
+                                          * (double) i / 48000.0;
+
+                        re += (double) d[i] * w * std::cos (ph);
+                        im -= (double) d[i] * w * std::sin (ph);
+                    }
+
+                    const double power = re * re + im * im;
+
+                    total += power;
+
+                    if (hz > 2000.0)
+                        high += power;
+                }
+
+                return total > 0.0 ? high / total : 0.0;
+            };
+
+            const double a = highFraction (*dark.audio);
+            const double b = highFraction (*bright.audio);
+
+            logMessage ("    energy above 2 kHz - cutoff 300 Hz: " + juce::String (a * 100.0, 3)
+                        + " %, cutoff 14 kHz: " + juce::String (b * 100.0, 3) + " %");
+
+            expect (b > a * 10.0,
+                    "the cutoff did not reach the render: " + juce::String (a, 6)
+                        + " against " + juce::String (b, 6));
+        }
+
+        beginTest ("the whole chain is printed, not just the voice");
+        {
+            // A print that stopped at the synth would be a different product:
+            // the instrument IS its chain, and a user who prints a patch drenched
+            // in Space expects the Space in the file.
+            auto printWithSpace = [this] (float mix, float decay)
+            {
+                TestHost host;
+                StateManager state (host.apvts);
+
+                // Every OTHER thing that rings is switched off, so what is left
+                // in the tail is Space or nothing. The first version of this
+                // test left Memory, Aura, Patina and Retro running, and both
+                // prints ran to the cap because something was always ringing.
+                host.registry.setFromUI (PID::auraOn, 0.0f);
+                host.registry.setFromUI (PID::patinaOn, 0.0f);
+                host.registry.setFromUI (PID::retroOn, 0.0f);
+                host.registry.setFromUI (PID::macroMemory, 0.0f);
+                host.registry.setFromUI (PID::macroWorld, 0.0f);
+                host.registry.setFromUI (PID::grainFxOn, 0.0f);
+                host.registry.setFromUI (PID::rewindOn, 0.0f);
+
+                host.registry.setFromUI (PID::spaceOn, 1.0f);
+                host.registry.setFromUI (PID::spaceMix, mix);
+                host.registry.setFromUI (PID::spaceDecay, decay);
+                host.registry.setFromUI (PID::ampRelease, 0.02f);
+
+                auto settings = quickSettings();
+                settings.maxTailSeconds = 4.0;
+
+                return PrintEngine::render (PrintEngine::capture (host.registry, state.session()),
+                                            settings);
+            };
+
+            const auto dry = printWithSpace (0.0f, 0.5f);
+            const auto wet = printWithSpace (0.9f, 6.0f);
+
+            expect (dry.ok && wet.ok, "a render failed");
+
+            if (! (dry.ok && wet.ok))
+                return;
+
+            // Energy remaining well after the note was released, not the
+            // length of the file. Length was the first version of this test
+            // and it measured nothing: both prints ran to the cap, because
+            // something in the chain is always still ringing at -80 dBFS.
+            auto tailEnergy = [] (const SampleBuffer& b)
+            {
+                const int from = (int) (48000.0 * 1.2);      // ~0.85 s after note-off
+
+                if (from >= b.lengthSamples())
+                    return 0.0;
+
+                double sum = 0.0;
+                const auto* d = b.audio.getReadPointer (0);
+
+                for (int i = from; i < b.lengthSamples(); ++i)
+                    sum += (double) d[i] * d[i];
+
+                return std::sqrt (sum / (double) (b.lengthSamples() - from));
+            };
+
+            const double dryTail = tailEnergy (*dry.audio);
+            const double wetTail = tailEnergy (*wet.audio);
+
+            logMessage ("    tail RMS 0.85 s after release - dry "
+                        + juce::String (juce::Decibels::gainToDecibels ((float) dryTail), 1)
+                        + " dBFS, drenched "
+                        + juce::String (juce::Decibels::gainToDecibels ((float) wetTail), 1) + " dBFS");
+
+            expect (wetTail > dryTail * 8.0,
+                    "a six-second reverb left " + juce::String (wetTail, 6)
+                        + " in the tail against a dry print's " + juce::String (dryTail, 6)
+                        + " - the chain is not in the render");
+        }
+
+        beginTest ("a patch with nothing switched on fails with a reason rather than a file of silence");
+        {
+            TestHost host;
+            StateManager state (host.apvts);
+
+            host.registry.setFromUI (PID::oscALevel, 0.0f);
+            host.registry.setFromUI (PID::oscBLevel, 0.0f);
+            host.registry.setFromUI (PID::oscCLevel, 0.0f);
+            host.registry.setFromUI (PID::subLevel, 0.0f);
+            host.registry.setFromUI (PID::noiseLevel, 0.0f);
+            host.registry.setFromUI (PID::masterGain, -60.0f);
+
+            const auto result = PrintEngine::render (PrintEngine::capture (host.registry,
+                                                                          state.session()),
+                                                     quickSettings());
+
+            expect (! result.ok, "a silent patch printed successfully");
+            expect (result.failure.isNotEmpty(), "a failed print gave no reason");
+            expect (result.audio == nullptr, "a failed print still carried a buffer");
+
+            logMessage ("    refusal reads: " + result.failure);
+        }
+
+        beginTest ("a print gives MUTATE the source it was previously refused");
+        {
+            // The whole point of phase 22, end to end: an instrument with no
+            // sample refuses to mutate; after a print it does not.
+            SourcePipeline pipeline;
+            TestHost host;
+            StateManager state (host.apvts);
+
+            mutation::Recipe recipe;
+            recipe.seed = 7u;
+            recipe.intent = mutation::Intent::memory;
+
+            harmony::Context context;
+            juce::String failure;
+
+            expect (! pipeline.mutate (recipe, context, failure),
+                    "an empty pipeline agreed to mutate nothing");
+            expect (failure.isNotEmpty(), "the refusal gave no reason");
+
+            const auto before = failure;
+
+            expect (pipeline.print (PrintEngine::capture (host.registry, state.session()),
+                                    quickSettings(), failure),
+                    "the print was refused: " + failure);
+
+            for (int i = 0; i < 4000 && pipeline.isPrinting(); ++i)
+            {
+                pipeline.poll();
+                juce::Thread::sleep (1);
+            }
+
+            pipeline.poll();
+
+            expect (! pipeline.isPrinting(), "the print never finished");
+
+            failure.clear();
+
+            const bool started = pipeline.mutate (recipe, context, failure);
+
+            logMessage ("    before the print, mutate said: " + before);
+            logMessage ("    after the print, mutate " + juce::String (started ? "started"
+                                                                               : "refused: " + failure));
+
+            expect (started, "mutate still refused after a print: " + failure);
+
+            for (int i = 0; i < 8000 && pipeline.isMutating(); ++i)
+            {
+                pipeline.poll();
+                juce::Thread::sleep (1);
+            }
+        }
+    }
+};
+
+static PrintTests printTests;
+
+
+// ===========================================================================
+//  MAKE INSTRUMENT
+//
+//  The step the product is named for: "...and turn the result into another
+//  instrument." Whatever is in the slot stops being something you are
+//  auditioning and becomes the thing the keyboard plays, which is what makes
+//  the loop a loop - print, mutate, make, print again.
+//
+//  Three things have to be true or it is a button that writes a file:
+//  the session must actually be pointed at the new audio, the source must
+//  actually be switched to SAMPLE (or the keyboard still plays the synth and
+//  nothing has been made), and the lineage must record where it came from.
+// ===========================================================================
+class InstrumentTests : public juce::UnitTest
+{
+public:
+    InstrumentTests() : juce::UnitTest ("Make instrument", "nacar") {}
+
+    /** A short buffer standing in for a print. */
+    static SampleBuffer::Ptr makeSource (double rate = 48000.0, int length = 24000)
+    {
+        auto b = new SampleBuffer();
+        b->audio.setSize (2, length, false, true, false);
+        b->sourceRate = rate;
+        b->displayName = "PRINT";
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* d = b->audio.getWritePointer (ch);
+
+            for (int i = 0; i < length; ++i)
+                d[i] = 0.4f * std::sin (2.0f * juce::MathConstants<float>::pi
+                                        * 220.0f * (float) i / (float) rate);
+        }
+
+        return b;
+    }
+
+    void runTest() override
+    {
+        beginTest ("committing a source points the session at it and switches to SAMPLE");
+        {
+            TestHost host;
+            StateManager state (host.apvts);
+
+            const auto source = makeSource();
+
+            AnalysisResult analysis;      // never ran: analysed == false
+
+            const auto result = InstrumentBuilder::build (*source, analysis, host.registry,
+                                                          state, "Niebla en la Ciudad");
+
+            expect (result.ok, "the build failed: " + result.failure);
+
+            if (! result.ok)
+                return;
+
+            // The file exists and the session names it. Without both, a saved
+            // session restores to silence: the audio is not in the host's blob.
+            expect (result.file.existsAsFile(), "no file was written");
+
+            const auto sample = state.group (ids::SAMPLE);
+
+            expect (sample.getProperty (ids::sampleFile).toString() == result.file.getFullPathName(),
+                    "the SAMPLE branch does not name the file that was written");
+            expect ((int) sample.getProperty (ids::sampleLengthSamples) == source->lengthSamples(),
+                    "the session describes a different length than was written");
+            expect ((double) sample.getProperty (ids::sampleRate) > 0.0,
+                    "the session records no sample rate");
+
+            // The one that makes it an instrument rather than a file: without
+            // this the keyboard still plays the synth and nothing was made.
+            expect (host.registry.choice (PID::sourceMode) == 1,
+                    "source_mode is " + juce::String (host.registry.choice (PID::sourceMode))
+                        + ", not SAMPLE - the keyboard would still play the synth");
+
+            expect (host.registry.userValue (PID::sampleKeyTrack) > 0.99f,
+                    "an instrument that does not follow the keyboard is one note");
+
+            logMessage ("    wrote " + result.file.getFileName()
+                        + ", root " + juce::String (result.rootNote, 0)
+                        + (result.rootFromAnalysis ? " (from the analysis)" : " (the printed note)"));
+
+            result.file.deleteFile();
+        }
+
+        beginTest ("the root note comes from the analysis only when the analysis is confident");
+        {
+            // Tuning an instrument to a low-confidence key estimate is worse
+            // than tuning it to the note it was demonstrably rendered at: the
+            // first is a guess presented as a measurement.
+            TestHost host;
+            StateManager state (host.apvts);
+
+            const auto source = makeSource();
+
+            AnalysisResult weak;
+            weak.analysed = true;
+            weak.root = 3;                  // D#
+            weak.rootConfidence = 0.20f;    // below the usable floor
+
+            const auto a = InstrumentBuilder::build (*source, weak, host.registry, state, "Weak");
+
+            expect (a.ok, "the build failed: " + a.failure);
+            expect (! a.rootFromAnalysis, "an unusable key was used as the root anyway");
+            expect (a.rootNote > 59.0f && a.rootNote < 61.0f,
+                    "the fallback root is " + juce::String (a.rootNote, 1) + ", not the printed note");
+
+            AnalysisResult strong;
+            strong.analysed = true;
+            strong.root = 3;
+            strong.rootConfidence = 0.90f;
+
+            const auto b = InstrumentBuilder::build (*source, strong, host.registry, state, "Strong");
+
+            expect (b.ok, "the build failed: " + b.failure);
+            expect (b.rootFromAnalysis, "a confident key was ignored");
+            expect (b.rootNote > 50.0f && b.rootNote < 52.0f,
+                    "root " + juce::String (b.rootNote, 1) + " is not D# in the printed octave");
+
+            logMessage ("    unusable key -> root " + juce::String (a.rootNote, 0)
+                        + ", usable key -> root " + juce::String (b.rootNote, 0));
+
+            a.file.deleteFile();
+            b.file.deleteFile();
+        }
+
+        beginTest ("the lineage records where each generation came from");
+        {
+            TestHost host;
+            StateManager state (host.apvts);
+
+            const auto source = makeSource();
+
+            AnalysisResult analysis;
+
+            const auto first  = InstrumentBuilder::build (*source, analysis, host.registry, state, "Seed");
+            const auto second = InstrumentBuilder::build (*source, analysis, host.registry, state, first.name);
+            const auto third  = InstrumentBuilder::build (*source, analysis, host.registry, state, second.name);
+
+            expect (first.ok && second.ok && third.ok, "a build failed");
+
+            const auto generations = state.group (ids::GENERATIONS);
+
+            expect (generations.getNumChildren() == 3,
+                    juce::String (generations.getNumChildren()) + " generations recorded, not 3");
+
+            // A root has no parent; everything after it points at the one
+            // before, so the chain can be walked back to the patch it began as.
+            expect ((int) generations.getChild (0).getProperty (ids::generationParent) == -1,
+                    "the first generation claims a parent");
+            expect ((int) generations.getChild (1).getProperty (ids::generationParent) == 0,
+                    "the second generation does not point at the first");
+            expect ((int) generations.getChild (2).getProperty (ids::generationParent) == 1,
+                    "the third generation does not point at the second");
+
+            expect ((int) generations.getProperty (ids::generationIndex) == 2,
+                    "the current generation is not the newest");
+
+            // The names count up and do not nest: GEN 2 of GEN 1 of Seed is
+            // "Seed GEN 3", not "Seed GEN 1 GEN 2 GEN 3".
+            logMessage ("    " + first.name + " -> " + second.name + " -> " + third.name);
+
+            expect (third.name == "Seed GEN 3",
+                    "the third generation is called \"" + third.name + "\"");
+
+            first.file.deleteFile();
+            second.file.deleteFile();
+            third.file.deleteFile();
+        }
+
+        beginTest ("an empty source is refused with a reason, and changes nothing");
+        {
+            TestHost host;
+            StateManager state (host.apvts);
+
+            SampleBuffer empty;
+
+            const auto before = host.registry.choice (PID::sourceMode);
+
+            const auto result = InstrumentBuilder::build (empty, AnalysisResult(), host.registry,
+                                                          state, "Nothing");
+
+            expect (! result.ok, "an empty buffer made an instrument");
+            expect (result.failure.isNotEmpty(), "the refusal gave no reason");
+            expect (host.registry.choice (PID::sourceMode) == before,
+                    "a refused build still switched the source");
+            expect (state.group (ids::GENERATIONS).getNumChildren() == 0,
+                    "a refused build still recorded a generation");
+
+            logMessage ("    refusal reads: " + result.failure);
+        }
+
+        beginTest ("the whole loop: print, mutate, make, and the result is playable");
+        {
+            // The product's own premise, end to end, in one test. Until phase
+            // 22 this could not be written: there was no way to get from a
+            // patch to audio without a file from outside.
+            SourcePipeline pipeline;
+            TestHost host;
+            StateManager state (host.apvts);
+
+            PrintEngine::Settings settings;
+            settings.sampleRate = 48000.0;
+            settings.blockSize = 256;
+            settings.holdSeconds = 0.3;
+            settings.maxTailSeconds = 1.2;
+
+            juce::String failure;
+
+            expect (pipeline.print (PrintEngine::capture (host.registry, state.session()),
+                                    settings, failure),
+                    "the print was refused: " + failure);
+
+            for (int i = 0; i < 4000 && pipeline.isPrinting(); ++i)
+            {
+                pipeline.poll();
+                juce::Thread::sleep (1);
+            }
+
+            pipeline.poll();
+
+            auto printed = pipeline.slot().acquire();
+
+            expect (printed != nullptr && ! printed->isEmpty(), "the print produced nothing");
+
+            if (printed == nullptr || printed->isEmpty())
+                return;
+
+            mutation::Recipe recipe;
+            recipe.seed = 31u;
+            recipe.intent = mutation::Intent::memory;
+
+            expect (pipeline.mutate (recipe, harmony::Context(), failure),
+                    "mutate refused a printed source: " + failure);
+
+            for (int i = 0; i < 8000 && pipeline.isMutating(); ++i)
+            {
+                pipeline.poll();
+                juce::Thread::sleep (1);
+            }
+
+            pipeline.poll();
+
+            auto mutated = pipeline.slot().acquire();
+
+            expect (mutated != nullptr && ! mutated->isEmpty(), "the mutation produced nothing");
+
+            if (mutated == nullptr || mutated->isEmpty())
+                return;
+
+            const auto made = InstrumentBuilder::build (*mutated, pipeline.analysis(),
+                                                        host.registry, state, "Niebla en la Ciudad");
+
+            expect (made.ok, "the instrument could not be made: " + made.failure);
+
+            if (! made.ok)
+                return;
+
+            expect (host.registry.choice (PID::sourceMode) == 1, "the result is not playable as a sample");
+
+            logMessage ("    patch -> print (" + juce::String (printed->lengthSamples())
+                        + " samples) -> mutation (" + juce::String (mutated->lengthSamples())
+                        + " samples) -> " + made.name);
+
+            made.file.deleteFile();
+        }
+    }
+};
+
+static InstrumentTests instrumentTests;
 
 static IntegrationTests integrationTests;
 

@@ -125,6 +125,43 @@ namespace nacar
 
         bool isMutating() const noexcept { return pipeline.isMutating(); }
 
+        // -------------------------------------------------------------------
+        //  PRINT  (phase 22)
+        //
+        //  Renders the instrument's own output into the sample slot, which is
+        //  how a patch becomes audio. Before it existed the only source the
+        //  instrument could reach was a file somebody dropped on it, so MUTATE
+        //  on a sound you had just designed refused - correctly, but it made
+        //  the second half of the instrument unreachable from the first.
+        //
+        //  Each print is recorded in the session's GENERATIONS branch with the
+        //  file it wrote and the generation it came from, so a lineage survives
+        //  a save and reload.
+        // -------------------------------------------------------------------
+
+        /** Message thread. Starts a print of the current patch. Returns false,
+            with `failure` set, when one is already running. */
+        bool requestPrint (juce::String& failure);
+
+        bool isPrinting() const noexcept { return pipeline.isPrinting(); }
+
+        /** Called on the message thread when a print finishes. */
+        std::function<void (const PrintEngine::Result&)> onPrintFinished;
+
+        // -------------------------------------------------------------------
+        //  MAKE INSTRUMENT  (phase 23)
+        // -------------------------------------------------------------------
+
+        /** Message thread. Commits whatever is in the slot - a print or a
+            mutation - as the instrument's playable source: writes it to disk,
+            points the SAMPLE branch at it, switches source_mode to SAMPLE and
+            advances the generation lineage. Returns false with `failure` set
+            when there is nothing to commit. */
+        bool makeInstrument (juce::String& failure);
+
+        /** Called on the message thread when an instrument is made. */
+        std::function<void (const juce::String& name)> onInstrumentMade;
+
         /** Called on the message thread when a mutation finishes, successfully
             or not. The Result carries its own failure text. */
         std::function<void (const mutation::Result&)> onMutationFinished;
@@ -167,6 +204,10 @@ namespace nacar
         /** Starts (or cancels) an asynchronous decode of whatever the SAMPLE
             branch names.  Message thread; returns immediately. */
         void startSampleLoad (const juce::File&);
+
+        /** Appends a GENERATION child naming this file and the generation it
+            came from, and returns its index. Message thread. */
+        int recordGeneration (const juce::File&, const juce::String& displayName);
 
         void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
         void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;

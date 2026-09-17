@@ -91,6 +91,28 @@ namespace nacar
         /** Caches the atomic pointers. Call once, from the constructor. */
         void attach (juce::AudioProcessorValueTreeState&);
 
+        /** Attaches to a caller-owned table of values instead of to an APVTS,
+            for rendering the instrument offline.
+
+            A print has to be of ONE state. If the renderer read the live
+            registry, a knob moved while it worked would land halfway through
+            the audio and the file would be of a patch that never existed. So
+            the caller snapshots the session into its own storage, attaches to
+            that, and renders something that cannot move under it.
+
+            ONLY THE READ PATH IS VALID on a registry attached this way:
+            raw(), userValue(), flag() and choice(), which is everything an
+            engine asks for. There is no APVTS behind it, so `parameter()`
+            returns null and the gesture and setFromUI methods have nothing to
+            write to - they are for a user turning a knob, and nobody is
+            turning a knob inside an offline render. `storage` must outlive
+            this registry. */
+        void attachSnapshot (std::array<std::atomic<float>, numParameters>& storage) noexcept;
+
+        /** True when this registry is reading a snapshot rather than an APVTS,
+            so a caller can assert it is not about to write through it. */
+        bool isSnapshot() const noexcept { return apvts == nullptr && values[0] != nullptr; }
+
         // -- audio-thread accessors, all lock-free --------------------------
 
         /** The value in force, in real units (Hz, seconds, dB, 0..1, choice

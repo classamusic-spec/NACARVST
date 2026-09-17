@@ -32,8 +32,8 @@ production-ready.
 | 19 | Audio analysis | **Built, tested and wired** |
 | 20 | Harmony engine | **Built, tested and wired** |
 | 21 | Mutation engine | **Built, tested and wired; not auditioned** |
-| 22 | Print / generations | Not started |
-| 23 | Make instrument | Not started |
+| 22 | Print / generations | **Built and tested; not auditioned** |
+| 23 | Make instrument | **Built and tested; not auditioned** |
 | 24 | Internal sound-design tools | Benchmark renderer and stage attribution |
 | 25–27 | Golden presets, golden mutations, factory library | **Factory library: 300 presets, rendered and measured.** Golden presets and golden mutations not started |
 | 28–29 | Optimisation, full QA | Not started |
@@ -162,7 +162,34 @@ source is bit-identical, which is what makes AGAIN reproducible.
 
 With no sample loaded, MUTATE says `NOTHING TO MUTATE · LOAD A SAMPLE FIRST`
 and does nothing. Rendering the synth's own output into a buffer so that it can
-be mutated is PRINT, which is Phase 22 and does not exist.
+be mutated is PRINT, which renders the instrument's own output into the slot.
+
+---
+
+## The loop the instrument is named for
+
+A patch becomes audio, that audio is broken apart, and the result becomes the
+next instrument:
+
+**PRINT** renders the whole chain - the synth, Memory, the six FX slots in the
+user's own order, the atmosphere engines and the output stage - into the sample
+slot. It renders a *snapshot* taken when the button is pressed, never the live
+registry, so a knob moved while the worker runs cannot land halfway through the
+file. Until it existed the only audio the instrument could reach was a file
+somebody dropped on it, so MUTATE on a patch you had just designed refused -
+correctly, and the second half of the instrument was unreachable from the first.
+
+**MAKE INSTRUMENT** commits whatever is in the slot as the playable source:
+writes the file, points the SAMPLE branch at it, switches `source_mode` to
+SAMPLE and sets the root note. The root comes from the analysis only when the
+analysis is *usable*; otherwise it is the note the print was rendered at, because
+tuning an instrument to a low-confidence key estimate is a guess presented as a
+measurement.
+
+Every print and every instrument records its parent in the `GENERATIONS` branch,
+so a chain can be walked back to the patch it began as.
+
+A test drives the whole loop: patch -> print -> mutation -> playable instrument.
 
 ---
 
@@ -172,10 +199,8 @@ be mutated is PRINT, which is Phase 22 and does not exist.
   values, gates, lengths and targets. Nothing advances them against the host
   clock. Its PREVIEW playhead is an editing aid driven by the UI timer and is
   labelled as such on the page.
-- **PRINT** and **MAKE INSTRUMENT** are Phases 22 and 23. Both say so in the
-  interface rather than pretending to work.
-- Nothing in the interface **saves** a preset. `PresetManager::saveUserPreset`
-  works and is round-trip verified; no button calls it.
+That is now the whole of it. PRINT, MAKE INSTRUMENT and preset saving all
+landed; what remains UI-only is the sequencer alone.
 
 ---
 

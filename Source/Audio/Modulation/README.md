@@ -9,11 +9,17 @@ LFO.h/.cpp                seven shapes, free or locked to song position
 BreathEngine.h/.cpp       organic non-repeating movement; also ORGANIC RANDOM
 PulseEngine.h/.cpp        five differently shaped ducks from one trigger
 ModMatrix.h/.cpp          eight routings, message thread to audio thread
+SequencerEngine.h/.cpp    four lanes of sixteen steps, locked to the transport
 ```
 
 `mod::Clock` and `mod::smoothStep` live at the top of `LFO.h` rather than in a
-seventh header, because the file set for this directory is fixed and the clock
-is first needed by the first thing that locks to tempo.
+header of their own, because the clock is first needed by the first thing that
+locks to tempo. Pulse, the synced LFOs and the sequencer all take one.
+
+`SequencerEngine` is not part of `ModulationEngine`. It is owned directly by
+`NacarEngine`, because a lane writes an *absolute position* for a parameter
+while everything in `ModulationEngine` produces an *offset*, and the two only
+compose where the overlay is written — see "The step sequencer" below.
 
 ---
 
@@ -416,6 +422,117 @@ which an overlay that engines never read would fail.
 
 ---
 
+## The step sequencer — §129
+
+Four lanes of sixteen steps. Each lane has its own length (1…16), its own
+enable and its own target parameter; the whole sequencer shares one tempo
+division. The SEQ page persists all of it under `ids::SEQUENCER` /
+`ids::SEQLANE`, with `laneTarget` (the parameter's permanent string ID),
+`laneEnabled`, `laneLength`, `laneValues` (sixteen comma-separated floats) and
+`laneGates` (a sixteen-character mask), plus `seqDivision` on the parent.
+`SequencerEngine::rebuildFromTree` reads exactly what that page writes.
+
+The identifiers and the division table live in `Source/Plugin/StateManager.h`
+(`ids::` and `seq::divisions`), not in the page, because `Source/Audio` must not
+include `Source/UI` and two copies of a table that pairs a printed name with a
+beat value is a pattern that plays at a tempo the interface does not show.
+
+### The handoff
+
+**Exactly `ModMatrix`'s**, deliberately — two staging buffers, an atomic index
+and a generation counter the audio thread validates across its own copy. There
+is no second pattern in this instrument and there must not be one. Dragging a
+value across a lane publishes many times per block, which is the case the index
+alone gets wrong and the counter fixes.
+
+### Position, not accumulation
+
+While the transport runs a lane's step is computed from `ppqPosition` — the
+position of the block's *first* sample — with nothing accumulated:
+
+```
+step = floor(ppq / beatsPerStep)  mod  laneLength
+```
+
+so pressing play twice over the same bar is the same performance twice, and a
+loop, a scrub or a jump needs no resynchronisation state. `floor`, not
+truncation, so a negative ppq during a count-in walks backwards through the
+pattern instead of sticking on step 0. When the transport is stopped an internal
+beat counter runs at the host tempo, kept level with the song position while the
+transport runs, so stopping continues from where the song was — the same
+convention Pulse and the synced LFOs already use.
+
+Because the step is a pure function of position, per-lane lengths actually
+drift: a three-step lane against a four-step lane disagrees on nine of the
+eleven steps between realignments, and both return to step 0 at twelve.
+
+### A gate of 0 holds; it does not zero
+
+A silent step means "nothing new happens here", so the lane keeps outputting the
+most recent gated step's value. Zeroing instead would slam a sequenced cutoff
+shut on every rest.
+
+The hold is resolved by **searching backwards through the pattern** — the most
+recent gated step at or before the current one, wrapping inside the lane's own
+length — rather than by remembering what was played. That is what keeps the
+sequencer a pure function of position: a lane entered halfway through a bar
+holds exactly what it would have held had it been running all along. A lane with
+no gates at all holds nothing and writes nothing, which is the default pattern
+the SEQ page creates.
+
+### The units, and how a lane composes with a routing
+
+A step value is 0…1 and it is **absolute**: it names a position across the
+target's whole range, not an offset from the knob. The step well draws a bar
+whose height is the value, and there is no per-lane depth control on the page —
+inventing one here would be adding a control to a locked reference.
+
+`NacarEngine` turns that into the overlay's units and adds the matrix's offset
+to it:
+
+```
+offset(target) = matrixOffset(target)                         // ModMatrix
+               + laneValue - normalisedUserValue(target)      // SequencerEngine
+```
+
+so **the lane sets the parameter's position and the matrix moves around it**. An
+LFO routed to a sequenced cutoff wobbles each step rather than being silently
+discarded; a lane on an unrouted parameter lands on exactly its step value.
+`ParameterRegistry::setModulation` clamps the sum into the parameter's own
+range, so neither can push it out.
+
+Two lanes naming the same parameter cannot both set a position, so the
+**lowest-numbered** one owns it and the other is ignored for that block. First
+writer rather than last, so adding a lane 4 later cannot quietly take lane 1's
+parameter away.
+
+`applyModulation` clears an override the moment nothing targets it any more,
+exactly as it does for the matrix: a stale override is a knob frozen at the last
+step the sequencer played.
+
+### Where it runs
+
+`NacarEngine::process` calls `sequencer.beginBlock` before
+`modulation.updateBlock`, and both before `applyModulation` and before the synth
+renders, so a sequenced parameter and a routing to it move in the same block
+rather than one apart.
+
+### Cost and limits
+
+`beginBlock` is O(lanes × steps) — sixty-four compares — and allocates nothing,
+locks nothing and builds no `juce::String`. Everything the audio thread reads is
+a plain value resolved on the message thread.
+
+The overlay carries one value per parameter per block, so the sequencer is
+block-rate like the matrix. A step boundary inside a block takes effect at the
+top of the next block: late by at most one buffer, never early, never skipped.
+A step shorter than a buffer would be under-sampled — 1/32 at 300 BPM is 25 ms
+against 46 ms for a 2048-sample buffer at 44.1 kHz — and because the step comes
+from position rather than an accumulator the lane stays locked to the song
+rather than falling progressively behind.
+
+---
+
 ## Parameter coverage
 
 Every parameter in the MODULATION section of `ParameterList.h` is read and used:
@@ -501,6 +618,13 @@ and its jitter multiplier cannot reach zero.
 - **The LFO cycle accumulator wraps** if it ever exceeds 10⁹ cycles (289 days at
   40 Hz), which would glitch a held random value once. Chosen over losing double
   precision.
+- **The sequencer is block-rate and has no per-lane depth.** Both are stated
+  above rather than hidden: a lane is absolute across its target's whole range,
+  and a step boundary inside a block lands at the top of the next one.
+- **Nothing creates the SEQUENCER branch until the SEQ page is opened.** A
+  session that has never been to that page publishes four empty lanes, which do
+  nothing — correct, but it means the sequencer is inert in a brand-new session
+  until the page has been visited once.
 - **The Pulse trigger list is capped at 32 per block.** Unreachable from the
   clock at any tempo and division, reachable from a dense MIDI chord only if more
   than 32 note-ons land in one block, in which case the oldest are dropped.

@@ -195,12 +195,19 @@ A test drives the whole loop: patch -> print -> mutation -> playable instrument.
 
 ## What is UI and state only
 
-- The **sequencer** (SEQ page) persists four lanes of sixteen steps with
-  values, gates, lengths and targets. Nothing advances them against the host
-  clock. Its PREVIEW playhead is an editing aid driven by the UI timer and is
-  labelled as such on the page.
-That is now the whole of it. PRINT, MAKE INSTRUMENT and preset saving all
-landed; what remains UI-only is the sequencer alone.
+Nothing. The **sequencer** was the last of it, and it now plays.
+`Source/Audio/Modulation/SequencerEngine` advances four lanes of sixteen steps
+against the host transport and `NacarEngine` applies each lane's current step to
+its target parameter through the modulation overlay. A lane has its own length,
+so lanes of different lengths drift and realign at their common multiple; a step
+value is absolute, 0..1 across the target's range; a gate of 0 holds the
+previous value rather than zeroing it; and the PREVIEW playhead now reads the
+engine's own position instead of running a UI timer. `Tests/SequencerTests.cpp`
+measures all of that, including that switching a lane off gives the parameter
+back rather than freezing it at the last step.
+
+Nobody has heard it. What is claimed here is what the code does and what the
+tests measure.
 
 ---
 
@@ -350,7 +357,15 @@ READMEs listed above. The ones that matter at instrument level:
   ring: a parameter an LFO is sweeping looks identical to one that is still.
   That is the correct default — a cap that jitters cannot be read or typed into
   — but the missing indicator is a real gap.
-- The sequencer stores step data that nothing reads yet.
+- The sequencer is block-rate, like the mod matrix: the overlay carries one
+  value per parameter per block, so a step boundary inside a block takes effect
+  at the top of the next one. At the fastest division with the largest buffers a
+  step can be shorter than a block and be under-sampled; the step is derived
+  from transport position rather than accumulated, so the lane stays locked to
+  the song instead of falling progressively behind.
+- The sequencer has no per-lane depth control, so a lane is absolute over its
+  target's whole range. That is a deliberate reading of the step well, not an
+  oversight, but it means a lane on a cutoff is a strong statement.
 
 ---
 

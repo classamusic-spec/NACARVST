@@ -9,9 +9,10 @@ namespace nacar
     /**
         Small things the modulation layer shares and nothing else needs.
 
-        They live in this header rather than in a seventh file because the
-        modulation directory's file set is fixed by its contract, and the clock
-        is first needed by the first thing that locks to tempo.
+        They live in this header rather than in one of their own because the
+        clock is first needed by the first thing that locks to tempo, and
+        everything that locks to tempo already includes this file: the LFOs,
+        Pulse, and the step sequencer.
     */
     namespace mod
     {

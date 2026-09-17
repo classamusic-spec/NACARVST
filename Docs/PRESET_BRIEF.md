@@ -127,6 +127,50 @@ neither is.
 
 ---
 
+## 3a. The two envelope destinations, and the trap in them
+
+`pitch_env_amt` and `pm_env_amt` are newer than most of the library and easy
+to miss, so they get their own note.
+
+| | range | what it does |
+|---|---|---|
+| `pitch_env_amt` | −48…+48 st | mod envelope 2 into oscillator pitch |
+| `pm_env_amt` | −1…+1 | mod envelope 2 into the PM index |
+
+**The sign is the thing people get backwards.** Envelope 2 rises to 1 at
+note-on and falls to its sustain, and the offset is `amount × env2`. So a
+**positive** `pitch_env_amt` starts the note **high and falls onto it** — the
+kick, the 808, the conga. A negative one arrives from below.
+
+**The trap: envelope 2's defaults are slow** — attack 0.90 s, decay 1.50 s,
+sustain 0.60. A preset that sets either amount and not the envelope gets a
+lazy swell instead of a transient, which is the opposite of what it asked
+for. Set `env2_attack`, `env2_decay` and `env2_sustain` every time.
+
+Rough shapes: a kick 12–36 st over 20–60 ms; a tom 5–12 st over 60–150 ms; a
+hand drum 3–10 st over 10–40 ms; a tine's index over 250–900 ms; a mallet's
+over 50–300 ms. Judge each preset rather than copying a number.
+
+**Two things that are not obvious:**
+
+- Envelope 2 is *not* envelope 1, on purpose. Envelope 1 is the filter
+  envelope, and a tine needs its index to collapse while its filter opens
+  slowly. But envelope 2 already had two other destinations before these
+  parameters existed: it adds a little to density, and it **morphs the vowel
+  of the FORMANT filter model**. On a `ch::fFormant` preset, reshaping
+  envelope 2 for a pitch or index envelope also changes how the vowel sweeps.
+  That is a real trade, not a bug — make it deliberately.
+- `pm_env_amt` is **summed** with `osc_pm` and the total is clamped to 0…1.
+  A preset with a high fixed index *and* a high envelope sits pinned at the
+  ceiling for the whole note, which wastes the envelope entirely. Lower the
+  fixed index when you add one.
+
+The filter sweep these replace is still a legitimate thing to do — it is just
+no longer the only way to get a pitched fall or a decaying index, and a preset
+should not credit the filter for something the pitch envelope is now doing.
+
+---
+
 ## 4. The verification you must run
 
 ```

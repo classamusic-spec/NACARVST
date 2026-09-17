@@ -84,7 +84,24 @@ namespace nacar
         const float* lfo1   = nullptr;   ///< -1..1
         const float* lfo2   = nullptr;   ///< -1..1
         const float* breath = nullptr;   ///< -1..1, organic and non-repeating
-        const float* pulse  = nullptr;   ///< 0..1, 1 = fully ducked
+        const float* pulse  = nullptr;   ///< 0..1, 1 = fully ducked - VOLUME
+
+        // Pulse's other three envelopes.
+        //
+        //  All five were generated from the start and only two were consumed:
+        //  VOLUME and WIDTH are applied by the chain's output stage, which can
+        //  see them. The other three belong to engines - the chain filter, the
+        //  reverb, Memory - and an engine can only read what it is handed, so
+        //  they were computed every block and thrown away.
+        //
+        //  They are separate envelopes rather than one shared duck because
+        //  Pulse gives each destination its own attack and release: a filter
+        //  that closes with the kick and a reverb that recovers slowly after it
+        //  is the sound this control exists for, and one envelope could not
+        //  make it.
+        const float* pulseFilter = nullptr;   ///< 0..1, 1 = fully ducked
+        const float* pulseSpace  = nullptr;
+        const float* pulseMemory = nullptr;
 
         int numSamples = 0;
 
@@ -98,6 +115,10 @@ namespace nacar
         forcedinline float lfo2At   (int i) const noexcept { return lfo2   != nullptr ? lfo2  [i] : 0.0f; }
         forcedinline float breathAt (int i) const noexcept { return breath != nullptr ? breath[i] : 0.0f; }
         forcedinline float pulseAt  (int i) const noexcept { return pulse  != nullptr ? pulse [i] : 0.0f; }
+
+        forcedinline float pulseFilterAt (int i) const noexcept { return pulseFilter != nullptr ? pulseFilter[i] : 0.0f; }
+        forcedinline float pulseSpaceAt  (int i) const noexcept { return pulseSpace  != nullptr ? pulseSpace [i] : 0.0f; }
+        forcedinline float pulseMemoryAt (int i) const noexcept { return pulseMemory != nullptr ? pulseMemory[i] : 0.0f; }
     };
 
     /**

@@ -654,7 +654,11 @@ namespace nacar
             const float inL = fx::guard (chL[i]);
             const float inR = stereo ? fx::guard (chR[i]) : inL;
 
-            const float duck   = 1.0f - duckDepth * macros.pulseAt (i);
+            // SPACE's own envelope: 1.20 attack and 1.60 release against the
+            // user's, because a tail stays masked longest. On the volume
+            // envelope the wet came back as fast as the dry, which is the one
+            // thing a reverb duck is supposed not to do.
+            const float duck   = 1.0f - duckDepth * macros.pulseSpaceAt (i);
             const float drift  = 1.0f + macros.breathAt (i) * 0.004f;
             const float scale  = sScale.at (i) * drift;
             const float dScale = sDiffScale.at (i);

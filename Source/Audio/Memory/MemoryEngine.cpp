@@ -151,7 +151,10 @@ namespace nacar
             stage[i].setSettings (settings);
 
         memory::StageMod mod;
-        mod.pulse       = macros.pulse;
+        // MEMORY's own envelope: a 1.30 release against the user's, because
+        // this is a texture change rather than a gate and it should let go
+        // more slowly than the level does.
+        mod.pulse       = macros.pulseMemory;
         mod.pulseDepth  = juce::jlimit (0.0f, 1.0f, macros.pulseToMemory);
         mod.breath      = macros.breath;
         mod.breathDepth = 0.5f + 0.5f * settings.movement;

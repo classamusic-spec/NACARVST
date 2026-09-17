@@ -124,6 +124,7 @@ namespace nacar
         if (n > capacity)
         {
             m.lfo1 = m.lfo2 = m.breath = m.pulse = nullptr;
+            m.pulseFilter = m.pulseSpace = m.pulseMemory = nullptr;
             return;
         }
 
@@ -183,7 +184,10 @@ namespace nacar
         m.lfo1   = lfoBuffer[0].data();
         m.lfo2   = lfoBuffer[1].data();
         m.breath = breathBuffer.data();
-        m.pulse  = pulse.envelope (PulseEngine::Destination::volume);
+        m.pulse       = pulse.envelope (PulseEngine::Destination::volume);
+        m.pulseFilter = pulse.envelope (PulseEngine::Destination::filter);
+        m.pulseSpace  = pulse.envelope (PulseEngine::Destination::space);
+        m.pulseMemory = pulse.envelope (PulseEngine::Destination::memory);
 
         const float depth = pulseOn ? juce::jlimit (0.0f, 1.0f, p.raw (PID::pulseDepth)) : 0.0f;
 

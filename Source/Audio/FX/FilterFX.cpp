@@ -397,7 +397,14 @@ namespace nacar
             const float depth = motionSm.at (i);
 
             // A kick makes the sound darker - specification 83.
-            const float pulseDark = macros.pulseToFilter * macros.pulseAt (i) * kPulseOctaves;
+            //
+            // Its OWN envelope, not the volume duck: Pulse scales FILTER's
+            // attack to 0.80 and its release to 0.70 of the user's, because
+            // high frequencies are masked first and re-emerge first. Reading
+            // the volume envelope here honoured the depth control and threw
+            // that shape away, so a filter duck moved in lockstep with the
+            // level duck no matter what the design said.
+            const float pulseDark = macros.pulseToFilter * macros.pulseFilterAt (i) * kPulseOctaves;
 
             const float cutoffLog2 = juce::jlimit (kMinCutoffLog2, kMaxCutoffLog2,
                                           cutoffSm.at (i)

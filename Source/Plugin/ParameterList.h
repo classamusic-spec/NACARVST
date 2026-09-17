@@ -254,6 +254,20 @@ FLOAT (rewindSpeed,    "rewind_speed",    "Speed",         0.1f,  4.0f, 1.0f,  1
 FLOAT (rewindTail,     "rewind_tail",     "Tail",          0.0f,  1.0f, 0.30f, 1.0f, "%",  "How much of the gesture survives afterwards.")        \
 FLOAT (rewindMix,      "rewind_mix",      "Rewind Mix",    0.0f,  1.0f, 0.70f, 1.0f, "%",  "Dry / wet.")                                          \
                                                                                                                                                  \
+/*  Whether the gesture re-arms itself, or fires once and waits.                                                                                 */\
+/*                                                                                                                                               */\
+/*  Section 88 describes Rewind as a momentary control: triggered, runs for a                                                                    */\
+/*  window, ends. With no trigger parameter to read, `rewind_on` had to be                                                                       */\
+/*  treated as a repeat enable instead - the grid or the free-run timer kept                                                                     */\
+/*  re-firing it for as long as it was on, which is a useful effect and is not                                                                   */\
+/*  the one the specification asks for.                                                                                                          */\
+/*                                                                                                                                               */\
+/*  Default TRUE, so every preset written before this existed behaves exactly                                                                    */\
+/*  as it did. Turned off, `rewind_on` is a one-shot: its rising edge fires the                                                                  */\
+/*  gesture once and nothing re-arms it. Pulse still triggers it, because a                                                                      */\
+/*  one-shot is a gesture that does not REPEAT, not one that cannot be played.                                                                   */\
+BOOL  (rewindRepeat,   "rewind_repeat",   "Rewind Repeat", true,                     "Re-fire on the grid, or fire once and wait.")         \
+                                                                                                                                                 \
 BOOL  (grainFxOn,      "grainfx_on",      "Grain",         false,                    "Granular reconstruction of the chain signal.")              \
 FLOAT (grainScatter,   "grain_scatter",   "Scatter",       0.0f,  1.0f, 0.35f, 1.0f, "%",  "Master granular intensity.")                          \
 FLOAT (grainSize,      "grain_size",      "Grain Size",    5.0f, 500.0f, 80.0f, 0.35f,"ms", "Length of each grain.")                              \

@@ -110,8 +110,10 @@
     TRIGGERING
     ----------------------------------------------------------------------
 
-    ParameterList.h has no trigger parameter, so `rewind_on` is treated as a
-    gate that re-arms the gesture rather than as a one-shot:
+    `rewind_repeat` decides whether the gesture re-arms itself.
+
+    ON (the default, and what every preset written before the parameter existed
+    gets): `rewind_on` is a gate that keeps re-arming the gesture -
 
       * rewind_on && rewind_sync   the gesture re-triggers on the musical grid
                                    given by rewind_div, derived per sample from
@@ -130,13 +132,17 @@
                                    button behaves like a trigger for a user who
                                    is playing it by hand.
 
+    OFF: `rewind_on` is a ONE-SHOT, which is the momentary control section 88
+    actually describes - triggered, runs for a window, ends.  Its rising edge
+    fires the gesture once and nothing re-arms it: no grid, no free-run timer.
+
+    Pulse still fires it in one-shot mode, deliberately.  A one-shot is a
+    gesture that does not REPEAT ITSELF, not one that cannot be played: section
+    88 lists Pulse alongside the UI, MIDI and automation as a trigger, and
+    silencing it here would remove a trigger rather than stop a repeat.
+
     A lockout of a quarter of the window stops a fast grid or a noisy Pulse
     machine-gunning the gesture.
-
-    NOT IMPLEMENTED: a UI or MIDI one-shot trigger.  There is nowhere for one
-    to come from - no parameter, and EditorHost is frozen - so it is absent
-    rather than invented.  It would need a single atomic flag on the engine set
-    by the editor and consumed here.
 
     ----------------------------------------------------------------------
     MACRO RESPONSE  (added to the parameters, never replacing them)
@@ -450,6 +456,7 @@ namespace nacar
         const int   modeIx   = juce::jlimit (0, 3, p.choice (PID::rewindMode));
         const int   divIx    = juce::jlimit (0, 5, p.choice (PID::rewindDivision));
         const bool  sync     = p.flag (PID::rewindSync);
+        const bool  repeat   = p.flag (PID::rewindRepeat);
         const float freeSec  = juce::jlimit (0.01f, 4.0f,  p.raw (PID::rewindLength));
         const float curveRaw = juce::jlimit (0.0f,  1.0f,  p.raw (PID::rewindCurve));
         const float speed    = juce::jlimit (0.1f,  4.0f,  p.raw (PID::rewindSpeed));
@@ -479,7 +486,9 @@ namespace nacar
                                                 (int) (windowSec * sampleRate));
 
         // -- triggering, prepared once ---------------------------------------
-        const bool   useGrid = sync && macros.transportPlaying && macros.hostBpm > 1.0;
+        // A one-shot has no grid and no timer: both exist only to re-arm, which
+        // is exactly what it must not do.
+        const bool   useGrid = repeat && sync && macros.transportPlaying && macros.hostBpm > 1.0;
         const double ppqPerSample = macros.hostBpm / (60.0 * sampleRate);
         const double divBeats = (double) juce::jmax (0.0625f, fx::kRewindDivisionBeats[divIx]);
         const float  freePeriod = juce::jmax (32.0f, freeSec * (float) sampleRate);
@@ -541,7 +550,16 @@ namespace nacar
                 // so it free-runs.  MACRO: Breath puts +-3 % on the period,
                 // which is a slow parameter and therefore the only kind Breath
                 // is allowed near.
-                if (! useGrid)
+                //
+                // Suppressed entirely for a one-shot, and the counter is held
+                // at its reset value rather than left running: a gesture that
+                // banked up free-run time while repeat was off would fire the
+                // instant it was turned back on.
+                if (! repeat)
+                {
+                    freeCounter = juce::jmax (32.0f, freePeriod);
+                }
+                else if (! useGrid)
                 {
                     freeCounter -= 1.0f;
 

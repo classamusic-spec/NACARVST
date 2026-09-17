@@ -11,6 +11,11 @@
 
 namespace nacar
 {
+    /** Declared in `Sources/Sample/SampleBuffer.h`.  Forward-declared here so
+        that every translation unit which routes audio does not have to pull in
+        the audio-format module as well. */
+    class SampleSlot;
+
     /** The six reorderable chain slots.  Display order is DSP order. */
     enum class FxSlot { retro = 0, crush, filter, rewind, grain, space, count };
 
@@ -118,6 +123,17 @@ namespace nacar
 
         /** Direct access for the parts of the UI that visualise the synth. */
         SynthEngine& getSynth() noexcept;
+
+        /** Points the sample SOURCE at the slot the loader publishes into.
+            Message thread, before audio starts; the slot is not owned and must
+            outlive the engine.  Null means the sample source is silent, which
+            is the state the instrument is in until a file is dropped. */
+        void setSampleSlot (const SampleSlot*) noexcept;
+
+        /** How many sample voices are sounding.  Separate from the synth's
+            count because they are separate sources, and reporting one number
+            for both would make an empty synth look busy. */
+        int getSampleVoiceCount() const noexcept;
 
         /** Rebuilds the modulation matrix from the session tree and publishes
             it to the audio thread.  Message thread only. */

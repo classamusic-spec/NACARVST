@@ -11,6 +11,24 @@ namespace nacar
     {
         registry.attach (apvts);
 
+        // The sample SOURCE reads whatever the loader has published.  Pointed
+        // at the slot here, once: nothing below this line changes it, and the
+        // slot is declared before the engine so it outlives it.
+        engine.setSampleSlot (&sampleSlot);
+
+        sampleLoader.onFinished = [this] (const SampleLoader::Result& result)
+        {
+            // What the decoder measured, written back where the interface
+            // reads it.  On failure these are cleared rather than left at the
+            // previous file's figures - the SAMPLE branch must never describe
+            // audio the instrument does not hold.
+            auto sample = stateManager.group (ids::SAMPLE);
+
+            sample.setProperty (ids::sampleRate,          result.ok ? result.sourceRate : 0.0, nullptr);
+            sample.setProperty (ids::sampleLengthSamples, result.ok ? result.lengthSamples : 0, nullptr);
+            sample.setProperty (ids::sampleChannels,      result.ok ? result.numChannels : 0, nullptr);
+        };
+
         // The chain order lives in the session tree and can change from the
         // editor, from a preset load or from a host restore, so the processor
         // watches the whole session rather than one child: StateManager's
@@ -61,9 +79,32 @@ namespace nacar
         engine.rebuildModMatrix (stateManager.session().getChildWithName (ids::MODMATRIX));
     }
 
+    // -----------------------------------------------------------------------
+    //  Sample loading
+    // -----------------------------------------------------------------------
+    void NacarProcessor::startSampleLoad (const juce::File& file)
+    {
+        // An empty path is how the interface says "there is no sample", and it
+        // has to reach the audio thread as promptly as a real one does.
+        if (file.getFullPathName().isEmpty())
+        {
+            sampleLoader.clear();
+            return;
+        }
+
+        sampleLoader.loadAsync (file);
+    }
+
     void NacarProcessor::valueTreePropertyChanged (juce::ValueTree& tree,
                                                    const juce::Identifier& property)
     {
+        // The viewport records a dropped file's path and stops there; this is
+        // where the path becomes audio.  Only `sampleFile` is watched, so the
+        // rate, length and channel count the decoder writes back below do not
+        // start a second decode.
+        if (tree.hasType (ids::SAMPLE) && property == ids::sampleFile)
+            startSampleLoad (juce::File (tree.getProperty (ids::sampleFile).toString()));
+
         if (tree.hasType (ids::FXCHAIN)
             && (property == ids::fxOrder || property.toString() == "fxBypass"))
             publishFxOrder();
@@ -329,6 +370,12 @@ namespace nacar
         // attached, so both are republished explicitly here too.
         publishFxOrder();
         publishModMatrix();
+
+        // A session that names a sample has to decode it again: the audio is
+        // not in the host's blob, only the path is.  Asynchronously, like any
+        // other load, so restoring a project does not stall the host.
+        startSampleLoad (juce::File (stateManager.group (ids::SAMPLE)
+                                         .getProperty (ids::sampleFile).toString()));
     }
 
     juce::AudioProcessorEditor* NacarProcessor::createEditor()

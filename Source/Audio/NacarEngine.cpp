@@ -5,6 +5,8 @@
 #include "Memory/MemoryEngine.h"
 #include "Modulation/ModulationEngine.h"
 
+#include "Sources/Sample/SampleEngine.h"
+
 #include "FX/RetroEngine.h"
 #include "FX/CrushEngine.h"
 #include "FX/FilterFX.h"
@@ -142,6 +144,14 @@ namespace nacar
         EngineSpec spec;
 
         SynthEngine synth;
+
+        /** The second SOURCE.  It sits beside the synth rather than after it:
+            both add into the same buffer before Memory sees anything, so every
+            stage downstream ages, colours and places the sample exactly as it
+            does the synth.  Which of the two is actually heard is `source_mode`,
+            and the sample engine reads that itself - see SampleEngine.cpp. */
+        SampleEngine sampleSource;
+
         ModulationEngine modulation;
         MemoryEngine memory;
 
@@ -213,6 +223,7 @@ namespace nacar
             spec.numChannels = juce::jmax (1, numChannels);
 
             synth.prepare (spec.sampleRate, spec.maxBlockSize, 2);
+            sampleSource.prepare (spec);
 
             modulation.prepare (spec);
             memory.prepare (spec);
@@ -241,6 +252,7 @@ namespace nacar
         void reset()
         {
             synth.reset();
+            sampleSource.reset();
             modulation.reset();
             memory.reset();
 
@@ -559,7 +571,15 @@ namespace nacar
             resolveMacros (macros, p);
 
             // -- source ------------------------------------------------------
+            //
+            // Both sources, every block, adding into the same buffer.  The
+            // sample engine is called whether or not `source_mode` selects it,
+            // for the same reason every FX module is: it owns its own bypass
+            // and its own fade off, and a source that is skipped rather than
+            // gated cannot fade anything.  With no sample loaded it adds
+            // silence - not a placeholder tone, not a click.
             synth.process (view, midi, p, transport.bpm);
+            sampleSource.process (view, midi, p, macros);
 
             // -- the chain ---------------------------------------------------
             const auto order = FxOrder::unpack (packedOrder.load (std::memory_order_relaxed));
@@ -648,7 +668,11 @@ namespace nacar
         impl->process (buffer, midi, params, transport);
     }
 
-    void NacarEngine::allNotesOff() { impl->synth.allNotesOff(); }
+    void NacarEngine::allNotesOff()
+    {
+        impl->synth.allNotesOff();
+        impl->sampleSource.allNotesOff();
+    }
 
     int NacarEngine::getActiveVoiceCount() const noexcept
     {
@@ -661,6 +685,16 @@ namespace nacar
     }
 
     SynthEngine& NacarEngine::getSynth() noexcept { return impl->synth; }
+
+    void NacarEngine::setSampleSlot (const SampleSlot* slot) noexcept
+    {
+        impl->sampleSource.setSlot (slot);
+    }
+
+    int NacarEngine::getSampleVoiceCount() const noexcept
+    {
+        return impl->sampleSource.getActiveVoiceCount();
+    }
 
     int NacarEngine::getLatencySamples() const noexcept
     {

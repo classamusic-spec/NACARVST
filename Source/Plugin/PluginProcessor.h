@@ -7,6 +7,7 @@
 #include "ParameterRegistry.h"
 #include "StateManager.h"
 #include "../Audio/NacarEngine.h"
+#include "../Audio/Sources/Sample/SampleLoader.h"
 
 namespace nacar
 {
@@ -71,6 +72,13 @@ namespace nacar
         /** How many synth voices are sounding, for the viewport. */
         int getActiveVoiceCount() const noexcept;
 
+        /** The decoded sample the audio thread is playing, and the decoder that
+            publishes into it.  Message thread only, and read-only to everything
+            but the loader: see `Source/Audio/Sources/Sample/SampleBuffer.h` for
+            who is allowed to publish and who is allowed to free. */
+        SampleSlot& getSampleSlot() noexcept       { return sampleSlot; }
+        SampleLoader& getSampleLoader() noexcept   { return sampleLoader; }
+
         // -------------------------------------------------------------------
         //  Scope tap
         //
@@ -106,6 +114,10 @@ namespace nacar
         void publishFxOrder();
         void publishModMatrix();
 
+        /** Starts (or cancels) an asynchronous decode of whatever the SAMPLE
+            branch names.  Message thread; returns immediately. */
+        void startSampleLoad (const juce::File&);
+
         void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
         void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
         void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
@@ -126,6 +138,11 @@ namespace nacar
         juce::AudioProcessorValueTreeState apvts;
         ParameterRegistry registry;
         StateManager stateManager;
+
+        // Declared before the engine so that they outlive it: the engine holds
+        // a pointer to the slot, and destruction runs in reverse.
+        SampleSlot sampleSlot;
+        SampleLoader sampleLoader { sampleSlot };
 
         NacarEngine engine;
 

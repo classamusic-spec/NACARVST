@@ -8,11 +8,13 @@ namespace nacar::presets::detail
     // ===============================================================
     void buildKeys (std::vector<FactoryPreset>& out)
     {
-        // A sine carrier phase-modulated by a sine at 2:1 is the tine; the
-        // second generation of Memory is the cassette it was dubbed onto.
+        // A sine carrier phase-modulated by a sine at 2:1 is the tine, and
+        // mod envelope 2 pulls the index back down while the note goes on
+        // ringing; the second generation of Memory is the cassette it was
+        // dubbed onto.
         add (out, Build ("Cassette Rhodes", "KEYS", "NOSTALGIC",
                          "rhodes,tape,tine,generation ii",
-                         "An electric piano dubbed to cassette twice, tine and all.")
+                         "An electric piano dubbed to cassette twice, its tine index falling on mod envelope 2.")
             .at (52, 3, 0.80f, 4.5)
             .chain ("RETRO,FILTER,CRUSH,SPACE,REWIND,GRAIN")
             .v (PID::synthCharacter, ch::mirage)
@@ -24,7 +26,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 4.0f)
-            .v (PID::oscPmAmount, 0.34f)
+            .v (PID::oscPmAmount, 0.14f).v (PID::pmEnvAmount, 0.62f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.15f)
             .v (PID::subHarmonics, 0.10f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.06f)
@@ -36,12 +38,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 4200.0f).v (PID::filterResonance, 0.10f)
             .v (PID::filterDrive, 0.18f).v (PID::filterKeyTrack, 0.75f)
-            .v (PID::filterEnvAmount, 0.34f).v (PID::filterVelAmount, 0.58f)
+            .v (PID::filterEnvAmount, 0.20f).v (PID::filterVelAmount, 0.58f)
             .v (PID::ampAttack, 0.003f).v (PID::ampDecay, 2.6f)
             .v (PID::ampSustain, 0.20f).v (PID::ampRelease, 1.1f)
             .v (PID::ampVelocity, 0.72f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 0.42f)
             .v (PID::env1Sustain, 0.04f).v (PID::env1Release, 0.30f)
+            .v (PID::env2Attack, 0.0012f).v (PID::env2Decay, 0.70f)
+            .v (PID::env2Sustain, 0.10f).v (PID::env2Release, 0.60f)
             .v (PID::macroMemory, 0.38f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.58f).v (PID::memoryWobble, 0.30f)
             .v (PID::memoryDiffusion, 0.24f).v (PID::memoryAsymmetry, 0.30f)
@@ -320,12 +324,14 @@ namespace nacar::presets::detail
         //  ELECTRIC PIANOS
         // -----------------------------------------------------------
 
-        // The tine: sine carrier, sine modulator an octave up, a fixed PM
-        // index and Env 1 pulling the MASS cutoff down over it so the
-        // brightness falls away faster than the level does.
+        // The tine: sine carrier, sine modulator an octave up, and mod
+        // envelope 2 collapsing the PM index over half a second while the
+        // note is still ringing.  Envelope 1 keeps only a slow settle on
+        // the MASS cutoff: a separate gesture on a separate timescale,
+        // which is what two envelopes are for.
         add (out, Build ("Living Room Tine", "KEYS", "WARM",
                          "rhodes,tine,velocity,close",
-                         "A 2:1 phase-modulated sine pair with the index fixed and the filter envelope taking the top off it.")
+                         "A 2:1 phase-modulated sine pair whose index collapses on mod envelope 2 while the MASS cutoff settles on envelope 1.")
             .at (53, 3, 0.86f, 5.0)
             .chain ("FILTER,RETRO,CRUSH,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -337,7 +343,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 2.0f)
             .v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscPmAmount, 0.46f)
+            .v (PID::oscPmAmount, 0.16f).v (PID::pmEnvAmount, 0.72f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.18f)
             .v (PID::subHarmonics, 0.14f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.05f)
@@ -349,12 +355,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 3800.0f).v (PID::filterResonance, 0.08f)
             .v (PID::filterDrive, 0.22f).v (PID::filterKeyTrack, 0.80f)
-            .v (PID::filterEnvAmount, 0.30f).v (PID::filterVelAmount, 0.62f)
+            .v (PID::filterEnvAmount, 0.10f).v (PID::filterVelAmount, 0.62f)
             .v (PID::ampAttack, 0.002f).v (PID::ampDecay, 2.8f)
             .v (PID::ampSustain, 0.16f).v (PID::ampRelease, 0.90f)
             .v (PID::ampVelocity, 0.88f)
-            .v (PID::env1Attack, 0.0008f).v (PID::env1Decay, 0.28f)
-            .v (PID::env1Sustain, 0.03f).v (PID::env1Release, 0.25f)
+            .v (PID::env1Attack, 0.0008f).v (PID::env1Decay, 0.90f)
+            .v (PID::env1Sustain, 0.20f).v (PID::env1Release, 0.50f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.55f)
+            .v (PID::env2Sustain, 0.08f).v (PID::env2Release, 0.45f)
             .v (PID::macroMemory, 0.18f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.34f).v (PID::memoryWobble, 0.16f)
             .v (PID::memoryDiffusion, 0.18f).v (PID::memoryAsymmetry, 0.14f)
@@ -386,12 +394,14 @@ namespace nacar::presets::detail
             .route (srcWheel, PID::oscPmAmount, 0.30f)
             .route (srcTouch, PID::filterCutoff, 0.18f));
 
-        // The same tine three copies further down the line: Memory at
-        // generation III, Retro ahead of the filter, and the tremolo made
-        // in the matrix rather than in an amplifier.
+        // The same tine three copies further down the line, with the index
+        // envelope that leaves the most of itself behind - long decay, the
+        // highest sustain of the electric pianos - to go with the softest
+        // copy: Memory at generation III, Retro ahead of the filter, and the
+        // tremolo made in the matrix rather than in an amplifier.
         add (out, Build ("Suitcase in the Hall", "KEYS", "NOSTALGIC",
                          "rhodes,tremolo,tape,generation iii",
-                         "A 2:1 tine put through a third-generation copy, with the tremolo written as two matrix routings.")
+                         "A 2:1 tine on a long index envelope, put through a third-generation copy, with the tremolo written as two matrix routings.")
             .at (50, 3, 0.74f, 6.0)
             .chain ("RETRO,CRUSH,FILTER,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::haze)
@@ -402,7 +412,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.06f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, -6.0f)
-            .v (PID::oscPmAmount, 0.30f)
+            .v (PID::oscPmAmount, 0.12f).v (PID::pmEnvAmount, 0.52f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.08f)
             .v (PID::oscCOctave, 2.0f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.16f)
@@ -410,13 +420,13 @@ namespace nacar::presets::detail
             .v (PID::noiseType, ch::nTexture).v (PID::noiseLevel, 0.07f)
             .v (PID::noiseAttackOnly, 0.80f)
             .v (PID::bodyAmount, 0.46f).v (PID::bodyTilt, 0.10f)
-            .v (PID::densityAmount, 0.24f)
+            .v (PID::densityAmount, 0.30f)
             .v (PID::preFilterDrive, 0.10f)
             .v (PID::postSaturation, 0.12f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 3100.0f).v (PID::filterResonance, 0.12f)
             .v (PID::filterDrive, 0.14f).v (PID::filterKeyTrack, 0.70f)
-            .v (PID::filterEnvAmount, 0.26f).v (PID::filterVelAmount, 0.48f)
+            .v (PID::filterEnvAmount, 0.14f).v (PID::filterVelAmount, 0.48f)
             .v (PID::filter2On, 1.0f).v (PID::filter2Type, ch::f2Hp)
             .v (PID::filter2Cutoff, 120.0f).v (PID::filter2Res, 0.10f)
             .v (PID::filter2Mix, 0.55f)
@@ -425,6 +435,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.70f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 0.50f)
             .v (PID::env1Sustain, 0.05f).v (PID::env1Release, 0.35f)
+            .v (PID::env2Attack, 0.0015f).v (PID::env2Decay, 0.80f)
+            .v (PID::env2Sustain, 0.12f).v (PID::env2Release, 0.70f)
             .v (PID::macroMemory, 0.52f).v (PID::memoryGen, ch::genIII)
             .v (PID::memoryBandwidth, 0.68f).v (PID::memoryWobble, 0.40f)
             .v (PID::memoryDiffusion, 0.34f).v (PID::memoryAsymmetry, 0.38f)
@@ -457,11 +469,17 @@ namespace nacar::presets::detail
             .route (srcLfo2, PID::retroDrift, 0.24f)
             .route (srcBreath, PID::filterCutoff, 0.05f));
 
-        // The reed rather than the tine: a hard pulse, bit reduction before
-        // anything else, and the FORMANT model doing the nasal part.
+        // The reed rather than the tine: a hard pulse, bit reduction
+        // before anything else, and the FORMANT model doing the nasal
+        // part.  Its index envelope is the fastest in the file, and since
+        // envelope 2 also morphs the FORMANT vowel, that reshaping is
+        // taken on purpose: the vowel opens on the strike and shuts with
+        // the index, which is a reed's bark rather than a sweep spread
+        // across the whole note.  Envelope 1 is left slower and shallower
+        // so the band-pass settle stays its own gesture.
         add (out, Build ("Radiator Wurlitzer", "KEYS", "AGGRESSIVE",
                          "wurlitzer,reed,formant,drive",
-                         "A hard pulse reed into the FORMANT filter with CRUSH at the head of the chain.")
+                         "A hard pulse reed whose PM index and FORMANT vowel both collapse on mod envelope 2, with CRUSH at the head of the chain.")
             .at (48, 3, 0.98f, 4.0)
             .chain ("CRUSH,FILTER,RETRO,GRAIN,SPACE,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -472,7 +490,8 @@ namespace nacar::presets::detail
             .v (PID::oscAPulseWidth, 0.42f).v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.10f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 0.0f)
-            .v (PID::oscPmAmount, 0.22f).v (PID::oscRingMod, 0.08f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.80f)
+            .v (PID::oscRingMod, 0.08f)
             .v (PID::subWave, ch::subTri).v (PID::subLevel, 0.26f)
             .v (PID::subHarmonics, 0.30f)
             .v (PID::bodyAmount, 0.54f).v (PID::bodyTilt, -0.18f)
@@ -482,12 +501,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fFormant).v (PID::filterType, ch::bp)
             .v (PID::filterCutoff, 1150.0f).v (PID::filterResonance, 0.34f)
             .v (PID::filterDrive, 0.38f).v (PID::filterKeyTrack, 0.45f)
-            .v (PID::filterEnvAmount, 0.48f).v (PID::filterVelAmount, 0.70f)
+            .v (PID::filterEnvAmount, 0.34f).v (PID::filterVelAmount, 0.70f)
             .v (PID::ampAttack, 0.002f).v (PID::ampDecay, 1.7f)
             .v (PID::ampSustain, 0.26f).v (PID::ampRelease, 0.45f)
             .v (PID::ampVelocity, 0.82f)
-            .v (PID::env1Attack, 0.0006f).v (PID::env1Decay, 0.18f)
-            .v (PID::env1Sustain, 0.02f).v (PID::env1Release, 0.15f)
+            .v (PID::env1Attack, 0.0006f).v (PID::env1Decay, 0.40f)
+            .v (PID::env1Sustain, 0.12f).v (PID::env1Release, 0.30f)
+            .v (PID::env2Attack, 0.0006f).v (PID::env2Decay, 0.28f)
+            .v (PID::env2Sustain, 0.04f).v (PID::env2Release, 0.22f)
             .v (PID::macroMemory, 0.24f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.46f).v (PID::memoryWobble, 0.22f)
             .v (PID::macroCharacter, 0.62f).v (PID::macroMotion, 0.28f)
@@ -524,11 +545,14 @@ namespace nacar::presets::detail
             .route (srcWheel, PID::filterCutoff, 0.25f)
             .route (srcOrganic, PID::oscAPulseWidth, 0.10f));
 
-        // Urbano electric piano: the reverb runs before the ageing, so what
-        // Retro and Patina wear down is the tail rather than the note.
+        // Urbano electric piano: the reverb runs before the ageing, so
+        // what Retro and Patina wear down is the tail rather than the
+        // note, and the index envelope is the slowest of the electric
+        // pianos - it blooms into the room instead of snapping shut in
+        // front of it.
         add (out, Build ("Cuarto Mojado", "KEYS", "DREAMY",
                          "urbano,wet,detuned,chords",
-                         "A soft 2:1 electric piano with SPACE ahead of RETRO, so the ageing lands on the tail.")
+                         "A soft 2:1 electric piano with a slow index envelope and SPACE ahead of RETRO, so the ageing lands on the tail.")
             .at (55, 4, 0.66f, 7.0)
             .chain ("FILTER,SPACE,GRAIN,RETRO,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::haze)
@@ -540,25 +564,27 @@ namespace nacar::presets::detail
             .v (PID::oscASpread, 0.45f).v (PID::oscAPhase, ch::phaseRandom)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.08f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, -9.0f)
-            .v (PID::oscPmAmount, 0.26f)
+            .v (PID::oscPmAmount, 0.12f).v (PID::pmEnvAmount, 0.44f)
             .v (PID::oscCWave, ch::tri).v (PID::oscCLevel, 0.10f)
             .v (PID::oscCOctave, 1.0f).v (PID::oscCPan, -0.30f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.20f)
             .v (PID::subHarmonics, 0.16f)
             .v (PID::noiseType, ch::nAir).v (PID::noiseLevel, 0.06f)
             .v (PID::noiseAttackOnly, 0.55f)
-            .v (PID::bodyAmount, 0.34f).v (PID::densityAmount, 0.30f)
+            .v (PID::bodyAmount, 0.34f).v (PID::densityAmount, 0.38f)
             .v (PID::preFilterDrive, 0.08f)
             .v (PID::postSaturation, 0.10f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 2600.0f).v (PID::filterResonance, 0.10f)
-            .v (PID::filterKeyTrack, 0.65f).v (PID::filterEnvAmount, 0.22f)
+            .v (PID::filterKeyTrack, 0.65f).v (PID::filterEnvAmount, 0.12f)
             .v (PID::filterVelAmount, 0.42f)
             .v (PID::ampAttack, 0.006f).v (PID::ampDecay, 3.6f)
             .v (PID::ampSustain, 0.18f).v (PID::ampRelease, 2.6f)
             .v (PID::ampVelocity, 0.62f)
             .v (PID::env1Attack, 0.002f).v (PID::env1Decay, 0.70f)
             .v (PID::env1Sustain, 0.06f).v (PID::env1Release, 0.50f)
+            .v (PID::env2Attack, 0.002f).v (PID::env2Decay, 0.90f)
+            .v (PID::env2Sustain, 0.14f).v (PID::env2Release, 0.90f)
             .v (PID::macroMemory, 0.30f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.50f).v (PID::memoryWobble, 0.34f)
             .v (PID::memoryDiffusion, 0.40f).v (PID::memoryAsymmetry, 0.30f)
@@ -596,10 +622,12 @@ namespace nacar::presets::detail
 
         // Written quiet on purpose: the output is 7.5 dB down and amp
         // velocity is nearly all the way up, so there is somewhere to play
-        // from.  Default chain order.
+        // from.  The index is the smallest of the electric pianos and its
+        // envelope the shallowest, so the quiet one stays quiet without the
+        // COMB having to do all of it.  Default chain order.
         add (out, Build ("Mesa de Noche", "KEYS", "MINIMAL",
                          "rhodes,quiet,comb,close",
-                         "A low-index tine through a short COMB, written 7.5 dB down so the velocity has room underneath it.")
+                         "A tine whose small index falls on mod envelope 2, through a short COMB, written 7.5 dB down so the velocity has room underneath it.")
             .at (57, 3, 0.45f, 5.5)
             .v (PID::synthCharacter, ch::haze)
             .v (PID::masterGain, -7.5f)
@@ -609,7 +637,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 3.0f)
-            .v (PID::oscPmAmount, 0.18f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.40f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.12f)
             .v (PID::subHarmonics, 0.10f)
             .v (PID::noiseType, ch::nDark).v (PID::noiseLevel, 0.05f)
@@ -626,6 +654,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.90f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 0.45f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.30f)
+            .v (PID::env2Attack, 0.001f).v (PID::env2Decay, 0.45f)
+            .v (PID::env2Sustain, 0.06f).v (PID::env2Release, 0.40f)
             .v (PID::macroMemory, 0.20f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.38f).v (PID::memoryWobble, 0.20f)
             .v (PID::memoryDiffusion, 0.26f)
@@ -1402,10 +1432,15 @@ namespace nacar::presets::detail
         // -----------------------------------------------------------
 
         // Half bell, half key: a metallic table rung against a sine, taken
-        // apart by GRAIN before anything else in the chain sees it.
+        // apart by GRAIN before anything else in the chain sees it.  A
+        // struck tone is a falling index too, so envelope 2 carries one -
+        // longer and shallower than any of the tines - and it takes the
+        // FORMANT vowel down with it, which is the trade made knowingly
+        // here: on a struck metal object the vowel and the partials
+        // belong to the same strike.
         add (out, Build ("Reloj de Pared", "KEYS", "CINEMATIC",
                          "bell,mallet,granular,formant",
-                         "A metallic wavetable rung against a sine, reassembled by GRAIN and read through FORMANT.")
+                         "A metallic wavetable rung against a sine on a falling PM index, reassembled by GRAIN and read through FORMANT.")
             .at (56, 3, 0.72f, 8.0)
             .chain ("GRAIN,SPACE,RETRO,FILTER,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -1418,7 +1453,8 @@ namespace nacar::presets::detail
             .v (PID::oscBWtPos, 0.46f).v (PID::oscBLevel, 0.38f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 13.0f)
             .v (PID::oscBPan, 0.22f)
-            .v (PID::oscPmAmount, 0.20f).v (PID::oscRingMod, 0.10f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.34f)
+            .v (PID::oscRingMod, 0.10f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.14f)
             .v (PID::subHarmonics, 0.16f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.08f)
@@ -1436,6 +1472,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.76f)
             .v (PID::env1Attack, 0.0006f).v (PID::env1Decay, 0.40f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.34f)
+            .v (PID::env2Attack, 0.0015f).v (PID::env2Decay, 1.10f)
+            .v (PID::env2Sustain, 0.22f).v (PID::env2Release, 1.20f)
             .v (PID::macroMemory, 0.26f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.46f).v (PID::memoryWobble, 0.24f)
             .v (PID::memoryDiffusion, 0.42f)
@@ -1475,7 +1513,9 @@ namespace nacar::presets::detail
 
         // The dry end of the category, on the default chain order: short
         // decay, almost no reverb and Memory nearly off, so the velocity
-        // and the comb are the whole instrument.
+        // and the comb are the whole instrument.  B is a mixed layer here
+        // rather than a modulator, so there is no PM index for envelope 2
+        // to take away: the strike lives in Env 1 and in the attack noise.
         add (out, Build ("Silla de Mimbre", "KEYS", "MINIMAL",
                          "mallet,wood,short,dry",
                          "A triangle and an organic wavetable struck short into the COMB model, with the ageing almost off.")

@@ -8,6 +8,16 @@ namespace nacar::presets::detail
     // ===============================================================
     void buildBells (std::vector<FactoryPreset>& out)
     {
+        // Seven of these are struck PM bells, and the index envelope - mod
+        // envelope 2 into pmEnvAmount - is most of what separates them from
+        // each other: depth and decay are per preset, longest on the tubular
+        // bell and shortest on the glass one.  Envelope 1 stays on the filter,
+        // so the index collapses on its own clock rather than the cutoff's.
+        // Left out deliberately: the four COMB-excited bells, which have no
+        // index at all; the four FORMANT bells, where envelope 2 is already
+        // the vowel sweep; Harbour Bell, which is FM and not PM; and Novena,
+        // whose PM is a fixed edge on a wavetable rather than a strike.
+
         // Audio-rate FM at a deliberately inharmonic ratio, which is what
         // makes a bell a bell.  The decay is long and the filter tracks.
         add (out, Build ("Harbour Bell", "BELLS", "MYSTERIOUS",
@@ -254,10 +264,12 @@ namespace nacar::presets::detail
             .route (srcWorld, PID::spaceSize, 0.12f));
 
         // PM at a sharp fourth two octaves up, so the modulator is not a whole
-        // multiple of the carrier.  The tail is in SPACE, not in the release.
+        // multiple of the carrier.  Mod envelope 2 owns the index and takes the
+        // longest decay in the file, because a tubular bell keeps its edge for
+        // a while.  The tail is in SPACE, not in the release.
         add (out, Build ("Campana de Torre", "BELLS", "DARK",
                          "pm,tubular,long tail,dark",
-                         "Phase modulation at a sharp fourth into the MASS ladder, with the whole tail living in an INFINITE reverb rather than in the amp release.")
+                         "Phase modulation at a sharp fourth into the MASS ladder, with mod envelope 2 carrying the index from 0.80 at the strike down to a 0.22 floor over 1.6 seconds and the whole tail living in an INFINITE reverb rather than in the amp release.")
             .at (60, 1, 0.85f, 4.0)
             .chain ("RETRO,FILTER,SPACE,GRAIN,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -269,7 +281,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 5.0f)
             .v (PID::oscBFine, 14.0f)
-            .v (PID::oscPmAmount, 0.52f)
+            .v (PID::oscPmAmount, 0.22f).v (PID::pmEnvAmount, 0.58f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.14f)
             .v (PID::oscCOctave, 2.0f).v (PID::oscCSemi, 10.0f)
             .v (PID::oscCFine, -22.0f).v (PID::oscCPan, 0.30f)
@@ -281,12 +293,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 3200.0f).v (PID::filterResonance, 0.18f)
             .v (PID::filterDrive, 0.24f).v (PID::filterKeyTrack, 0.85f)
-            .v (PID::filterEnvAmount, 0.55f).v (PID::filterVelAmount, 0.45f)
+            .v (PID::filterEnvAmount, 0.34f).v (PID::filterVelAmount, 0.45f)
             .v (PID::ampAttack, 0.002f).v (PID::ampDecay, 7.5f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 2.4f)
             .v (PID::ampVelocity, 0.60f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 1.8f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.9f)
+            .v (PID::env2Attack, 0.0012f).v (PID::env2Decay, 1.60f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.26f).v (PID::memoryBandwidth, 0.46f)
             .v (PID::memoryWobble, 0.24f).v (PID::memoryDiffusion, 0.40f)
             .v (PID::macroMotion, 0.30f).v (PID::macroWorld, 0.82f)
@@ -377,10 +391,12 @@ namespace nacar::presets::detail
             .route (srcTouch, PID::spaceMix, 0.22f));
 
         // GRAIN sits before SPACE, so the room is built out of the grains
-        // rather than the strike.  The ratio is a sharp minor third, two up.
+        // rather than the strike.  The ratio is a sharp minor third, two up,
+        // and mod envelope 2 pulls the index back inside a second, so most of
+        // what the granulator is given is already the plainer tone.
         add (out, Build ("Procesion", "BELLS", "CINEMATIC",
                          "pm,ceremonial,granular,slow",
-                         "An inharmonic PM bell granulated first and reverberated after, for a ceremonial line that arrives already diffused.")
+                         "An inharmonic PM bell whose index falls from 0.76 to 0.16 in under a second on mod envelope 2, granulated first and reverberated after, for a ceremonial line that arrives already diffused.")
             .at (65, 2, 0.80f, 4.0)
             .chain ("RETRO,FILTER,GRAIN,SPACE,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -392,7 +408,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 2.0f).v (PID::oscBSemi, 3.0f)
             .v (PID::oscBFine, 41.0f)
-            .v (PID::oscPmAmount, 0.38f)
+            .v (PID::oscPmAmount, 0.16f).v (PID::pmEnvAmount, 0.60f)
             .v (PID::oscCWave, ch::tri).v (PID::oscCLevel, 0.10f)
             .v (PID::oscCOctave, 1.0f).v (PID::oscCSemi, 7.0f)
             .v (PID::oscCPan, -0.28f)
@@ -403,12 +419,14 @@ namespace nacar::presets::detail
             .v (PID::postSaturation, 0.10f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 4400.0f).v (PID::filterResonance, 0.20f)
-            .v (PID::filterKeyTrack, 0.80f).v (PID::filterEnvAmount, 0.50f)
+            .v (PID::filterKeyTrack, 0.80f).v (PID::filterEnvAmount, 0.30f)
             .v (PID::filterVelAmount, 0.45f)
             .v (PID::ampAttack, 0.003f).v (PID::ampDecay, 3.4f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 1.6f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 1.1f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.001f).v (PID::env2Decay, 0.90f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.34f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.52f).v (PID::memoryWobble, 0.30f)
             .v (PID::memoryDiffusion, 0.48f)
@@ -509,9 +527,11 @@ namespace nacar::presets::detail
 
         // A glass bell: PM at seven and a half times the carrier, high-passed
         // hard so there is air and no body, and the grains taken from the room.
+        // The deepest index envelope in the file and by far the shortest, at
+        // 0.12 s: glass gives its edge up almost as soon as it is struck.
         add (out, Build ("Vitral", "BELLS", "COLD",
                          "pm,glass,bright,high",
-                         "PM at a ratio just off a major seventh two octaves up, high-passed at 420 Hz with a band-pass creative filter on top, for the highest line in an arrangement.")
+                         "PM at a ratio just off a major seventh two octaves up with mod envelope 2 collapsing the index in 0.12 seconds, high-passed at 420 Hz with a band-pass creative filter on top, for the highest line in an arrangement.")
             .at (71, 1, 0.82f, 3.0)
             .chain ("FILTER,SPACE,GRAIN,RETRO,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -523,7 +543,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 2.0f).v (PID::oscBSemi, 11.0f)
             .v (PID::oscBFine, -9.0f)
-            .v (PID::oscPmAmount, 0.30f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.74f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.12f)
             .v (PID::oscCOctave, 3.0f).v (PID::oscCSemi, 4.0f)
             .v (PID::oscCFine, 12.0f).v (PID::oscCPan, 0.30f)
@@ -542,6 +562,8 @@ namespace nacar::presets::detail
             .v (PID::ampAttack, 0.0005f).v (PID::ampDecay, 1.6f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 1.0f)
             .v (PID::ampVelocity, 0.75f)
+            .v (PID::env2Attack, 0.0006f).v (PID::env2Decay, 0.12f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.06f).v (PID::memoryBandwidth, 0.10f)
             .v (PID::macroCharacter, 0.12f).v (PID::macroMotion, 0.20f)
             .v (PID::macroWorld, 0.62f).v (PID::macroWeight, 0.28f)
@@ -636,10 +658,11 @@ namespace nacar::presets::detail
             .route (srcWheel, PID::grainFeedback, 0.25f));
 
         // Small, mechanical and wound up: Generation III Memory and a worn
-        // medium are the preset; the PM bell under them is tiny on purpose.
+        // medium are the preset; the PM bell under them is tiny on purpose,
+        // and so is its index envelope - 0.49 at the strike, gone in 0.2 s.
         add (out, Build ("Caja de Laton", "BELLS", "NOSTALGIC",
                          "music box,pm,retro,mechanical",
-                         "A small PM bell at a detuned tenth run through a worn medium and Generation III Memory, for a wound mechanism rather than a struck bell.")
+                         "A small PM bell at a detuned tenth carrying the shallowest index envelope in the file, run through a worn medium and Generation III Memory, for a wound mechanism rather than a struck bell.")
             .at (72, 1, 0.66f, 3.0)
             .chain ("RETRO,CRUSH,FILTER,SPACE,REWIND,GRAIN")
             .v (PID::synthCharacter, ch::mirage)
@@ -651,7 +674,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 4.0f)
             .v (PID::oscBFine, 26.0f)
-            .v (PID::oscPmAmount, 0.26f)
+            .v (PID::oscPmAmount, 0.09f).v (PID::pmEnvAmount, 0.40f)
             .v (PID::oscCWave, ch::tri).v (PID::oscCLevel, 0.08f)
             .v (PID::oscCOctave, 2.0f).v (PID::oscCSemi, 3.0f)
             .v (PID::subLevel, 0.0f)
@@ -662,11 +685,13 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::bp)
             .v (PID::filterCutoff, 2100.0f).v (PID::filterResonance, 0.34f)
             .v (PID::filterDrive, 0.16f).v (PID::filterKeyTrack, 1.0f)
-            .v (PID::filterEnvAmount, 0.30f).v (PID::filterVelAmount, 0.40f)
+            .v (PID::filterEnvAmount, 0.20f).v (PID::filterVelAmount, 0.40f)
             .v (PID::ampAttack, 0.0006f).v (PID::ampDecay, 1.5f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.70f)
             .v (PID::ampVelocity, 0.62f)
             .v (PID::env1Decay, 0.25f).v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.20f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.58f).v (PID::memoryGen, ch::genIII)
             .v (PID::memoryBandwidth, 0.70f).v (PID::memoryWobble, 0.62f)
             .v (PID::memoryDiffusion, 0.40f).v (PID::memoryAsymmetry, 0.44f)
@@ -992,9 +1017,11 @@ namespace nacar::presets::detail
 
         // Urbano: small PM bell, REWIND set to an eighth IN FRONT of the
         // reverb, so the repeat happens before the room rather than inside it.
+        // The index envelope is a third of a second, short enough that only
+        // the strike itself reaches REWIND with the full index in it.
         add (out, Build ("Campanita de Marzo", "BELLS", "ROMANTIC",
                          "urbano,pm,repeat,top line",
-                         "A small PM bell with a stacked fifth on the aux oscillator and REWIND at an eighth ahead of the reverb, built to carry a minor top line over an empty mix.")
+                         "A small PM bell with a stacked fifth on the aux oscillator, a third-of-a-second index envelope on mod envelope 2 and REWIND at an eighth ahead of the reverb, built to carry a minor top line over an empty mix.")
             .at (67, 1, 0.80f, 3.5)
             .chain ("FILTER,REWIND,SPACE,RETRO,GRAIN,CRUSH")
             .v (PID::synthCharacter, ch::mirage)
@@ -1005,7 +1032,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 3.0f)
             .v (PID::oscBFine, 19.0f)
-            .v (PID::oscPmAmount, 0.34f)
+            .v (PID::oscPmAmount, 0.15f).v (PID::pmEnvAmount, 0.50f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.14f)
             .v (PID::oscCOctave, 1.0f).v (PID::oscCSemi, 7.0f)
             .v (PID::oscCPan, 0.26f)
@@ -1016,12 +1043,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 5600.0f).v (PID::filterResonance, 0.16f)
             .v (PID::filterDrive, 0.14f).v (PID::filterKeyTrack, 0.90f)
-            .v (PID::filterEnvAmount, 0.44f).v (PID::filterVelAmount, 0.48f)
+            .v (PID::filterEnvAmount, 0.28f).v (PID::filterVelAmount, 0.48f)
             .v (PID::ampAttack, 0.0008f).v (PID::ampDecay, 1.8f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.90f)
             .v (PID::ampVelocity, 0.64f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 0.55f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.32f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.20f).v (PID::memoryBandwidth, 0.34f)
             .v (PID::memoryWobble, 0.22f)
             .v (PID::macroCharacter, 0.24f).v (PID::macroMotion, 0.34f)
@@ -1056,10 +1085,11 @@ namespace nacar::presets::detail
             .route (srcTouch, PID::oscPmAmount, 0.20f));
 
         // The same urbano idea with the order reversed: SPACE first and REWIND
-        // after it, so the repeats carry the tail with them.
+        // after it, so the repeats carry the tail with them.  The index
+        // envelope is six-tenths of a second, nearly twice its sibling's.
         add (out, Build ("Luna de Nacar", "BELLS", "DREAMY",
                          "urbano,pm,wet,repeat",
-                         "PM at pi times the carrier over a fifth-stacked aux oscillator, reverberated first and rewound after, so each repeat brings its own room with it.")
+                         "PM at pi times the carrier over a fifth-stacked aux oscillator, its index falling over six-tenths of a second on mod envelope 2, reverberated first and rewound after, so each repeat brings its own room with it.")
             .at (70, 3, 0.75f, 4.0)
             .chain ("FILTER,SPACE,REWIND,RETRO,CRUSH,GRAIN")
             .v (PID::synthCharacter, ch::mirage)
@@ -1071,7 +1101,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::tri).v (PID::oscBLevel, 0.10f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 8.0f)
             .v (PID::oscBFine, -21.0f)
-            .v (PID::oscPmAmount, 0.42f)
+            .v (PID::oscPmAmount, 0.18f).v (PID::pmEnvAmount, 0.56f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.16f)
             .v (PID::oscCOctave, 2.0f).v (PID::oscCSemi, 7.0f)
             .v (PID::oscCFine, 6.0f).v (PID::oscCPan, -0.30f)
@@ -1082,7 +1112,7 @@ namespace nacar::presets::detail
             .v (PID::postSaturation, 0.08f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 6200.0f).v (PID::filterResonance, 0.18f)
-            .v (PID::filterKeyTrack, 0.85f).v (PID::filterEnvAmount, 0.46f)
+            .v (PID::filterKeyTrack, 0.85f).v (PID::filterEnvAmount, 0.30f)
             .v (PID::filterVelAmount, 0.40f)
             .v (PID::filter2On, 1.0f).v (PID::filter2Type, ch::f2Bp)
             .v (PID::filter2Cutoff, 3200.0f).v (PID::filter2Res, 0.28f)
@@ -1092,6 +1122,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.60f)
             .v (PID::env1Attack, 0.001f).v (PID::env1Decay, 0.80f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.001f).v (PID::env2Decay, 0.60f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.26f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.44f).v (PID::memoryWobble, 0.30f)
             .v (PID::memoryDiffusion, 0.46f)
@@ -1196,11 +1228,13 @@ namespace nacar::presets::detail
             .route (srcOrganic, PID::oscAWtPos, 0.12f));
 
         // The haunted end: a carrier pulled a quarter-tone flat, a NOTCH with
-        // a negative envelope, and SPACE last in the chain so the reverb gets
-        // everything the crusher and the granulator have already done.
+        // a negative filter envelope of its own, an index envelope that stops
+        // just short of zero so the bell never entirely settles, and SPACE last
+        // in the chain so the reverb gets everything the crusher and the
+        // granulator have already done.
         add (out, Build ("Torre Sin Hora", "BELLS", "HAUNTED",
                          "pm,detuned,broken,notch",
-                         "A PM bell with the carrier pulled a quarter-tone flat, read through a NOTCH with a negative filter envelope and a COMB behind it, with REWIND stalling the transport before the reverb finally gets it.")
+                         "A PM bell with the carrier pulled a quarter-tone flat and an index envelope that settles onto a small residue rather than onto nothing, read through a NOTCH with a negative filter envelope and a COMB behind it, with REWIND stalling the transport before the reverb finally gets it.")
             .at (61, 2, 0.70f, 4.0)
             .chain ("CRUSH,GRAIN,FILTER,RETRO,REWIND,SPACE")
             .v (PID::synthCharacter, ch::mirage)
@@ -1212,7 +1246,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 6.0f)
             .v (PID::oscBFine, 44.0f)
-            .v (PID::oscPmAmount, 0.58f)
+            .v (PID::oscPmAmount, 0.22f).v (PID::pmEnvAmount, 0.52f)
             .v (PID::oscCWave, ch::tri).v (PID::oscCLevel, 0.18f)
             .v (PID::oscCOctave, 0.0f).v (PID::oscCSemi, 1.0f)
             .v (PID::oscCFine, 27.0f).v (PID::oscCPan, 0.34f)
@@ -1234,6 +1268,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.50f)
             .v (PID::env1Attack, 0.004f).v (PID::env1Decay, 1.3f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 1.0f)
+            .v (PID::env2Attack, 0.002f).v (PID::env2Decay, 0.75f)
+            .v (PID::env2Sustain, 0.05f)
             .v (PID::macroMemory, 0.64f).v (PID::memoryGen, ch::genIV)
             .v (PID::memoryBandwidth, 0.74f).v (PID::memoryWobble, 0.80f)
             .v (PID::memoryDiffusion, 0.62f).v (PID::memoryAsymmetry, 0.66f)

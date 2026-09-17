@@ -35,7 +35,7 @@ production-ready.
 | 22 | Print / generations | Not started |
 | 23 | Make instrument | Not started |
 | 24 | Internal sound-design tools | Benchmark renderer and stage attribution |
-| 25–27 | Golden presets, golden mutations, factory library | Not started |
+| 25–27 | Golden presets, golden mutations, factory library | **Factory library: 300 presets, rendered and measured.** Golden presets and golden mutations not started |
 | 28–29 | Optimisation, full QA | Not started |
 
 ---
@@ -69,6 +69,13 @@ correlation-aware normalisation, sub, noise, Body, Density, drift, voice
 variation, two primary filter characters plus comb and formant, three envelopes,
 poly/mono/legato with glide, voice stealing, and frequency-dependent stereo with
 a mono low band. MIRAGE, HAZE and MASS share that core and differ in behaviour.
+
+The envelopes reach three destinations between them: envelope 1 the filter
+cutoff and the noise exciter gate, envelope 2 the oscillator pitch and the PM
+index (plus density and the FORMANT model's vowel, which it always did). The
+pitch and index destinations are what a kick's fall and a tine's decaying
+index are made of; before they existed both were approximated with a resonant
+filter sweep, and several presets said so in their own comments.
 
 **The chain processes.** Eleven engines behind the synth, in the order the
 specification sets out:
@@ -281,6 +288,11 @@ READMEs listed above. The ones that matter at instrument level:
   are per-voice quantities, and making them work means the *voice* consulting
   the matrix rather than the engine publishing a global average. A test asserts
   they stay inert, so anybody who later wires a stand-in has to say so.
+
+  The two destinations this cost most - envelope into pitch, envelope into the
+  PM index - are now hard-wired as `pitch_env_amt` and `pm_env_amt` off
+  envelope 2, so the gap is no longer audible in the library. Everything else
+  a per-voice matrix would allow still is not reachable.
 - **Three of Pulse's five envelopes are generated and discarded.** VOLUME and
   WIDTH are consumed by the output stage; FILTER, SPACE and MEMORY would each
   have to be read by the engine that owns that behaviour, and none does yet.

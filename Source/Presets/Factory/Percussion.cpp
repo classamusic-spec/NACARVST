@@ -177,15 +177,24 @@ namespace nacar::presets::detail
             .route (srcOrganic, PID::filterCutoff, 0.12f));
 
         // -- the hand-played Latin layer ---------------------------------
-        //  ENV 1 is the only per-voice envelope a preset can aim anywhere,
-        //  and the one place it lands is `filter_env_amt`.  So the pitch
-        //  fall that makes a struck membrane read as a membrane is made
-        //  here the same way DRUMS makes it: a resonant peak dropped by
-        //  mod envelope 1 inside the first twenty or thirty milliseconds.
+        //  The pitch fall that makes a struck membrane read as a membrane is
+        //  made here by `pitch_env_amt`: mod envelope 2 into oscillator pitch,
+        //  in semitones, POSITIVE so the note starts above and falls onto the
+        //  key that was pressed.  Envelope 2 defaults slow, so every preset
+        //  that asks for it sets its own shape - attack half a millisecond,
+        //  decay in the tens of milliseconds, no sustain - because this
+        //  category is over inside its first fifty.  Depths stay in the two to
+        //  eight semitone range a hand drum bends over; two octaves is a kick,
+        //  not a skin.  `pm_env_amt` is the same envelope into the PM index,
+        //  for the struck metal and clay whose inharmonic edge goes before
+        //  their body does.  ENV 1 is left to `filter_env_amt` alone, which is
+        //  now the attack brightness of the hit and nothing else: where it was
+        //  standing in for the fall it has been cut back to what the
+        //  brightness needs on its own.
 
         add (out, Build ("Quinto Abierto", "PERCUSSION", "WARM",
                          "conga,skin,open,hand",
-                         "Built the way an open conga tone is built: a triangle body under a pink-noise slap, with mod envelope 1 dropping a resonant MASS ladder over the first thirty milliseconds.")
+                         "Built the way an open conga tone is built: a triangle body under a pink-noise slap, with mod envelope 2 dropping the pitch five semitones onto the note across the first thirty milliseconds.")
             .at (50, 1, 0.92f, 1.8)
             .chain ("FILTER,RETRO,CRUSH,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -197,6 +206,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.24f)
             .v (PID::oscBSemi, 7.0f).v (PID::oscBFine, 9.0f)
             .v (PID::oscBPhase, ch::phaseReset)
+            .v (PID::pitchEnvAmount, 5.0f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.16f)
             .v (PID::subHarmonics, 0.28f)
             .v (PID::noiseType, ch::nPink).v (PID::noiseLevel, 0.34f)
@@ -208,12 +218,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 420.0f).v (PID::filterResonance, 0.52f)
             .v (PID::filterDrive, 0.26f).v (PID::filterKeyTrack, 1.0f)
-            .v (PID::filterEnvAmount, 0.72f).v (PID::filterVelAmount, 0.52f)
+            .v (PID::filterEnvAmount, 0.30f).v (PID::filterVelAmount, 0.52f)
             .v (PID::ampAttack, 0.0008f).v (PID::ampDecay, 0.30f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.10f)
             .v (PID::ampVelocity, 0.62f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.028f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.03f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.030f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.03f)
             .v (PID::macroMemory, 0.16f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.32f).v (PID::memoryWobble, 0.06f)
             .v (PID::macroCharacter, 0.34f).v (PID::macroMotion, 0.14f)
@@ -241,7 +253,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Tumbao Cerrado", "PERCUSSION", "INTIMATE",
                          "conga,muted,comb,hand",
-                         "The muted stroke of the same drum: the body cut to seventy-five milliseconds and a COMB primary filter standing in for a hand left on the head.")
+                         "The muted stroke of the same drum: the body cut to seventy-five milliseconds, a COMB primary filter standing in for a hand left on the head, and four semitones of mod envelope 2 into pitch over the first twelve milliseconds.")
             .at (43, 1, 0.80f, 1.5)
             .chain ("RETRO,FILTER,CRUSH,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::haze)
@@ -252,6 +264,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset).v (PID::oscAPhaseOffset, 0.20f)
             .v (PID::oscBWave, ch::tri).v (PID::oscBLevel, 0.18f)
             .v (PID::oscBSemi, 5.0f).v (PID::oscBFine, -14.0f)
+            .v (PID::pitchEnvAmount, 4.0f)
             .v (PID::subLevel, 0.12f).v (PID::subHarmonics, 0.22f)
             .v (PID::noiseType, ch::nDark).v (PID::noiseLevel, 0.26f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -261,13 +274,15 @@ namespace nacar::presets::detail
             .v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fComb).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 620.0f).v (PID::filterResonance, 0.44f)
-            .v (PID::filterKeyTrack, 1.0f).v (PID::filterEnvAmount, 0.34f)
+            .v (PID::filterKeyTrack, 1.0f).v (PID::filterEnvAmount, 0.22f)
             .v (PID::filterVelAmount, 0.45f)
             .v (PID::ampAttack, 0.0006f).v (PID::ampDecay, 0.075f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.05f)
             .v (PID::ampVelocity, 0.58f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.018f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.02f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.012f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.02f)
             .v (PID::macroMemory, 0.12f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.28f)
             .v (PID::macroCharacter, 0.26f).v (PID::macroMotion, 0.10f)
@@ -294,7 +309,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Bongó de Palma", "PERCUSSION", "AGGRESSIVE",
                          "bongo,slap,hand,street",
-                         "The slap articulation: a white-noise crack band-passed through the HAZE filter over a short high membrane, high-passed clear of the body and finished inside ninety milliseconds.")
+                         "The slap articulation: a white-noise crack band-passed through the HAZE filter over a short high membrane, the membrane given three semitones of mod envelope 2 into pitch, high-passed clear of the body and finished inside ninety milliseconds.")
             .at (52, 1, 1.0f, 1.5)
             .chain ("CRUSH,FILTER,RETRO,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -307,6 +322,7 @@ namespace nacar::presets::detail
             .v (PID::oscBSemi, 11.0f).v (PID::oscBFine, 24.0f)
             .v (PID::oscBPulseWidth, 0.35f)
             .v (PID::oscRingMod, 0.18f)
+            .v (PID::pitchEnvAmount, 3.0f)
             .v (PID::subLevel, 0.06f)
             .v (PID::noiseType, ch::nWhite).v (PID::noiseLevel, 0.78f)
             .v (PID::noiseAttackOnly, 0.80f)
@@ -325,6 +341,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.70f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.014f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.02f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.010f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.02f)
             .v (PID::macroMemory, 0.18f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.40f).v (PID::memoryWobble, 0.06f)
             .v (PID::macroCharacter, 0.52f).v (PID::macroMotion, 0.12f)
@@ -354,7 +372,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Campana de Barrio", "PERCUSSION", "COLD",
                          "cowbell,metal,dembow,street",
-                         "Two pulse waves a tritone apart with a little phase modulation between them, band-passed and then high-passed clear of the body, which is how a cowbell is built.")
+                         "Two pulse waves a tritone apart with phase modulation between them whose index is opened by mod envelope 2 and back to its resting depth inside forty milliseconds, band-passed and then high-passed clear of the body, which is how a cowbell is built.")
             .at (48, 1, 1.0f, 1.5)
             .chain ("FILTER,CRUSH,SPACE,RETRO,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -368,7 +386,7 @@ namespace nacar::presets::detail
             .v (PID::oscBOctave, 2.0f).v (PID::oscBSemi, 6.0f)
             .v (PID::oscBFine, 8.0f).v (PID::oscBPulseWidth, 0.46f)
             .v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscPmAmount, 0.10f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.16f)
             .v (PID::subLevel, 0.0f)
             .v (PID::noiseType, ch::nDigital).v (PID::noiseLevel, 0.10f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -388,6 +406,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.55f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.012f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.02f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.040f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.04f)
             .v (PID::macroMemory, 0.20f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.44f).v (PID::memoryWobble, 0.05f)
             .v (PID::macroCharacter, 0.50f).v (PID::macroMotion, 0.08f)
@@ -420,7 +440,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Timbal de Lata", "PERCUSSION", "DIRTY",
                          "timbale,metal,shell,struck",
-                         "A METALLIC wavetable struck at a fixed phase and high-passed through the MASS ladder, with a COMB second filter in place of a shallow steel shell.")
+                         "A METALLIC wavetable struck at a fixed phase and high-passed through the MASS ladder, with a COMB second filter in place of a shallow steel shell and two semitones of mod envelope 2 into pitch on the strike.")
             .at (51, 1, 0.95f, 2.0)
             .chain ("RETRO,CRUSH,FILTER,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -434,6 +454,7 @@ namespace nacar::presets::detail
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 3.0f)
             .v (PID::oscBFine, 17.0f)
             .v (PID::oscRingMod, 0.16f)
+            .v (PID::pitchEnvAmount, 2.0f)
             .v (PID::subLevel, 0.08f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.30f)
             .v (PID::noiseAttackOnly, 0.92f)
@@ -453,6 +474,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.64f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.022f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.03f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.012f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.02f)
             .v (PID::macroMemory, 0.30f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.50f).v (PID::memoryWobble, 0.12f)
             .v (PID::memoryAsymmetry, 0.22f)
@@ -609,6 +632,11 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.52f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.007f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.01f)
+            // Deliberately no pitch or PM envelope, and envelope 2 left at
+            // its slow default: no oscillator runs here at all, so there is
+            // nothing to bend or to modulate, and the only thing envelope 2
+            // still reaches is the FORMANT vowel, which is meant to sit near
+            // its dark end for the whole forty milliseconds rather than sweep.
             .v (PID::macroMemory, 0.14f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.34f)
             .v (PID::macroCharacter, 0.24f).v (PID::macroMotion, 0.20f)
@@ -698,7 +726,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Dos Palos", "PERCUSSION", "MINIMAL",
                          "clave,wood,transient,dembow",
-                         "Two sticks: a triangle body three octaves up at a fixed start phase, thirty-five milliseconds long, with the MASS ladder resonating just above the fundamental and almost nothing after the transient.")
+                         "Two sticks: a triangle body three octaves up at a fixed start phase, thirty-five milliseconds long, with the MASS ladder resonating just above the fundamental, two semitones of mod envelope 2 into pitch on the strike, and almost nothing after the transient.")
             .at (52, 1, 1.0f, 1.5)
             .chain ("FILTER,RETRO,SPACE,GRAIN,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -711,6 +739,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.26f)
             .v (PID::oscBOctave, 3.0f).v (PID::oscBSemi, 9.0f)
             .v (PID::oscBFine, -12.0f).v (PID::oscBPhase, ch::phaseReset)
+            .v (PID::pitchEnvAmount, 2.0f)
             .v (PID::subLevel, 0.06f).v (PID::subHarmonics, 0.20f)
             .v (PID::noiseType, ch::nWhite).v (PID::noiseLevel, 0.16f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -727,6 +756,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.50f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.006f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.01f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.006f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.01f)
             .v (PID::macroMemory, 0.10f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.24f)
             .v (PID::macroCharacter, 0.28f).v (PID::macroMotion, 0.06f)
@@ -752,7 +783,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Madera Hueca", "PERCUSSION", "WARM",
                          "woodblock,hollow,comb,wood",
-                         "The HOLLOW wavetable through a COMB filter tracking the note at 1.0, which is how a block with a slot cut in it is built, and fifty milliseconds of it.")
+                         "The HOLLOW wavetable through a COMB filter tracking the note at 1.0, which is how a block with a slot cut in it is built, fifty milliseconds of it, and two semitones of mod envelope 2 into pitch on the strike.")
             .at (50, 1, 0.92f, 1.5)
             .chain ("RETRO,FILTER,GRAIN,SPACE,CRUSH,REWIND")
             .v (PID::synthCharacter, ch::haze)
@@ -765,6 +796,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::tri).v (PID::oscBLevel, 0.20f)
             .v (PID::oscBOctave, 2.0f).v (PID::oscBSemi, 7.0f)
             .v (PID::oscBFine, 6.0f)
+            .v (PID::pitchEnvAmount, 2.0f)
             .v (PID::subLevel, 0.08f).v (PID::subHarmonics, 0.18f)
             .v (PID::noiseType, ch::nTexture).v (PID::noiseLevel, 0.30f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -784,6 +816,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.58f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.009f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.012f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.008f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.012f)
             .v (PID::macroMemory, 0.16f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.30f).v (PID::memoryWobble, 0.06f)
             .v (PID::macroCharacter, 0.32f).v (PID::macroMotion, 0.12f)
@@ -866,7 +900,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Marco y Piel", "PERCUSSION", "CINEMATIC",
                          "frame drum,skin,low,hand",
-                         "A wide frame with a skin over it: a sine body an octave down beside a triangle sub, DARK noise on the attack, and mod envelope 1 dropping a resonant MASS peak over twenty milliseconds.")
+                         "A wide frame with a skin over it: a sine body an octave down beside a triangle sub, DARK noise on the attack, and mod envelope 2 dropping the pitch seven semitones onto the note over thirty-five milliseconds.")
             .at (38, 1, 0.94f, 2.5)
             .chain ("RETRO,FILTER,SPACE,REWIND,CRUSH,GRAIN")
             .v (PID::synthCharacter, ch::mass)
@@ -879,6 +913,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::tri).v (PID::oscBLevel, 0.20f)
             .v (PID::oscBOctave, -1.0f).v (PID::oscBSemi, 5.0f)
             .v (PID::oscBFine, -9.0f)
+            .v (PID::pitchEnvAmount, 7.0f)
             .v (PID::subWave, ch::subTri).v (PID::subLevel, 0.34f)
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.36f)
             .v (PID::noiseType, ch::nDark).v (PID::noiseLevel, 0.30f)
@@ -890,12 +925,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 260.0f).v (PID::filterResonance, 0.48f)
             .v (PID::filterDrive, 0.30f).v (PID::filterKeyTrack, 0.85f)
-            .v (PID::filterEnvAmount, 0.66f).v (PID::filterVelAmount, 0.48f)
+            .v (PID::filterEnvAmount, 0.28f).v (PID::filterVelAmount, 0.48f)
             .v (PID::ampAttack, 0.0010f).v (PID::ampDecay, 0.38f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.22f)
             .v (PID::ampVelocity, 0.60f)
             .v (PID::env1Attack, 0.0008f).v (PID::env1Decay, 0.020f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.03f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.035f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.04f)
             .v (PID::macroMemory, 0.26f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.44f).v (PID::memoryWobble, 0.10f)
             .v (PID::macroCharacter, 0.38f).v (PID::macroMotion, 0.18f)
@@ -924,7 +961,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Copa de Barro", "PERCUSSION", "MYSTERIOUS",
                          "goblet,clay,skin,hand",
-                         "A clay goblet under a skin: an ASYMMETRIC wavetable body with phase modulation from a detuned sine, a FORMANT primary filter for the throat of the shell, and the room crushed after it rather than before.")
+                         "A clay goblet under a skin: an ASYMMETRIC wavetable body seven semitones above the note at the strike, phase modulation from a detuned sine whose index falls away with it inside twenty-five milliseconds, a FORMANT primary filter for the throat of the shell, and the room crushed after it rather than before.")
             .at (44, 1, 0.90f, 2.0)
             .chain ("FILTER,SPACE,RETRO,CRUSH,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::haze)
@@ -937,6 +974,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.24f)
             .v (PID::oscBSemi, 4.0f).v (PID::oscBFine, 13.0f)
             .v (PID::oscPmAmount, 0.22f)
+            .v (PID::pitchEnvAmount, 7.0f).v (PID::pmEnvAmount, 0.18f)
             .v (PID::subLevel, 0.14f).v (PID::subHarmonics, 0.26f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.40f)
             .v (PID::noiseAttackOnly, 0.88f)
@@ -946,13 +984,21 @@ namespace nacar::presets::detail
             .v (PID::postSatMode, ch::satWarm)
             .v (PID::filterModel, ch::fFormant).v (PID::filterType, ch::bp)
             .v (PID::filterCutoff, 900.0f).v (PID::filterResonance, 0.42f)
-            .v (PID::filterKeyTrack, 0.90f).v (PID::filterEnvAmount, 0.56f)
+            .v (PID::filterKeyTrack, 0.90f).v (PID::filterEnvAmount, 0.26f)
             .v (PID::filterVelAmount, 0.50f)
             .v (PID::ampAttack, 0.0008f).v (PID::ampDecay, 0.26f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.12f)
             .v (PID::ampVelocity, 0.62f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.024f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.03f)
+            // Envelope 2 drives three things in this preset: the pitch fall,
+            // the PM index and - the primary filter being FORMANT - the vowel
+            // morph.  Made percussive it carries the vowel across the strike
+            // and settles back, which is the shape a struck shell wants; left
+            // at its slow default it would have parked the vowel near U and
+            // given the other two a swell instead of a transient.
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.025f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.03f)
             .v (PID::macroMemory, 0.28f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.46f).v (PID::memoryWobble, 0.14f)
             .v (PID::memoryDiffusion, 0.22f)
@@ -984,7 +1030,7 @@ namespace nacar::presets::detail
 
         add (out, Build ("Sampler de Esquina", "PERCUSSION", "BROKEN",
                          "crush,memory,sampled,street",
-                         "A clean hand hit put in a room, granulated, and only then sampled badly: nine bits at a 12 kHz clock with jitter on it, Memory on generation IV, and the chain filter last.")
+                         "A clean hand hit - five semitones of mod envelope 2 into pitch, landing on the note in twenty-five milliseconds - put in a room, granulated, and only then sampled badly: nine bits at a 12 kHz clock with jitter on it, Memory on generation IV, and the chain filter last.")
             .at (41, 1, 0.95f, 2.5)
             .chain ("SPACE,GRAIN,CRUSH,RETRO,FILTER,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -996,6 +1042,7 @@ namespace nacar::presets::detail
             .v (PID::oscBSemi, 6.0f).v (PID::oscBFine, 18.0f)
             .v (PID::oscBPulseWidth, 0.30f)
             .v (PID::oscRingMod, 0.20f)
+            .v (PID::pitchEnvAmount, 5.0f)
             .v (PID::subLevel, 0.12f).v (PID::subHarmonics, 0.24f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.34f)
             .v (PID::noiseAttackOnly, 0.90f)
@@ -1005,12 +1052,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 1400.0f).v (PID::filterResonance, 0.40f)
             .v (PID::filterDrive, 0.32f).v (PID::filterKeyTrack, 0.70f)
-            .v (PID::filterEnvAmount, 0.52f).v (PID::filterVelAmount, 0.50f)
+            .v (PID::filterEnvAmount, 0.36f).v (PID::filterVelAmount, 0.50f)
             .v (PID::ampAttack, 0.0008f).v (PID::ampDecay, 0.28f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.16f)
             .v (PID::ampVelocity, 0.64f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.026f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.03f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.025f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.03f)
             .v (PID::macroMemory, 0.78f).v (PID::memoryGen, ch::genIV)
             .v (PID::memoryBandwidth, 0.70f).v (PID::memoryWobble, 0.54f)
             .v (PID::memoryDiffusion, 0.44f).v (PID::memoryAsymmetry, 0.50f)

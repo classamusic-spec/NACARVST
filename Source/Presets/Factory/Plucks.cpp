@@ -316,6 +316,12 @@ namespace nacar::presets::detail
 
         // FORMANT on the primary and a comb behind it, and the whole tail
         // handed to Aura: Space is set to a small chamber at 0.16 mix.
+        //
+        // The PM index here is fixed and stays fixed.  Envelope 2 morphs the
+        // FORMANT vowel, and its slow default shape is what walks that vowel
+        // across the note; shortening it for an index envelope would buy a
+        // strike and spend the sweep this preset is built on.  Gota de Plata,
+        // further down, makes the opposite trade on purpose.
         add (out, Build ("Rosario", "PLUCKS", "MYSTERIOUS",
                          "mystical,formant,aura,bead",
                          "A sine struck through a formant filter with the whole tail handed to Aura rather than to the reverb.")
@@ -441,6 +447,8 @@ namespace nacar::presets::detail
 
         // SPACE sits ahead of GRAIN in the chain, so the granular stage is
         // rebuilding the reverb tail rather than the note that made it.
+        // The PM index is low and enveloped rather than held: Env 2 opens it
+        // on the strike and it is back to 0.09 well inside the body.
         add (out, Build ("Agua de Luna", "PLUCKS", "DREAMY",
                          "granular,octave grains,mystical,wide",
                          "Space runs before Grain, so what the granular stage rebuilds is the reverb tail and not the note.")
@@ -454,7 +462,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::wt).v (PID::oscBWtTable, ch::tSpectral)
             .v (PID::oscBWtPos, 0.52f).v (PID::oscBLevel, 0.26f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 6.0f)
-            .v (PID::oscPmAmount, 0.18f)
+            .v (PID::oscPmAmount, 0.09f).v (PID::pmEnvAmount, 0.34f)
             .v (PID::subLevel, 0.10f)
             .v (PID::noiseType, ch::nAir).v (PID::noiseLevel, 0.10f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -462,12 +470,14 @@ namespace nacar::presets::detail
             .v (PID::postSaturation, 0.08f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 4200.0f).v (PID::filterResonance, 0.18f)
-            .v (PID::filterKeyTrack, 0.95f).v (PID::filterEnvAmount, 0.46f)
+            .v (PID::filterKeyTrack, 0.95f).v (PID::filterEnvAmount, 0.38f)
             .v (PID::filterVelAmount, 0.52f)
             .v (PID::ampAttack, 0.0012f).v (PID::ampDecay, 0.48f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.18f)
             .v (PID::ampVelocity, 0.64f)
             .v (PID::env1Decay, 0.11f).v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.0015f).v (PID::env2Decay, 0.20f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.14f)
             .v (PID::macroMemory, 0.28f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.42f).v (PID::memoryWobble, 0.26f)
             .v (PID::macroCharacter, 0.24f).v (PID::macroMotion, 0.52f)
@@ -570,11 +580,16 @@ namespace nacar::presets::detail
             .route (srcWheel, PID::rewindMix, 0.30f));
 
         // ---- marimba, kalimba and mallet -----------------------------
-        // Env 1 is 55 ms long and owns the cutoff, which is the difference
-        // between a struck bar and a plucked string.
+        // What makes these struck rather than plucked is Env 2 into the PM
+        // index: the index is open for the length of the strike and gone
+        // after it, and the fixed part of it is low so the envelope has room
+        // to move before the sum reaches the ceiling.  Env 1 keeps its own,
+        // separate job here - it gates the attack-only noise exciter and
+        // shapes what is left of the cutoff - which is why the two are on
+        // different envelopes.
         add (out, Build ("Marimba de Lluvia", "PLUCKS", "WARM",
                          "marimba,phase modulation,mallet,wood",
-                         "A sine carrier phase-modulated from two octaves up, with a fifty-five millisecond Env 1 closing the cutoff again.")
+                         "A sine carrier phase-modulated from two octaves up, with the index opened by Env 2 and gone again in seventy milliseconds.")
             .at (67, 1, 0.82f, 3.0)
             .chain ("CRUSH,FILTER,RETRO,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -584,7 +599,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.0f)
             .v (PID::oscBOctave, 2.0f).v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscPmAmount, 0.42f)
+            .v (PID::oscPmAmount, 0.10f).v (PID::pmEnvAmount, 0.62f)
             .v (PID::oscCWave, ch::tri).v (PID::oscCLevel, 0.14f)
             .v (PID::oscCOctave, 2.0f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.24f)
@@ -598,12 +613,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 2600.0f).v (PID::filterResonance, 0.14f)
             .v (PID::filterDrive, 0.22f).v (PID::filterKeyTrack, 0.90f)
-            .v (PID::filterEnvAmount, 0.58f).v (PID::filterVelAmount, 0.62f)
+            .v (PID::filterEnvAmount, 0.24f).v (PID::filterVelAmount, 0.62f)
             .v (PID::ampAttack, 0.0008f).v (PID::ampDecay, 0.42f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.16f)
             .v (PID::ampVelocity, 0.72f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.055f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.08f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.07f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.08f)
             .v (PID::macroMemory, 0.20f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.34f).v (PID::memoryWobble, 0.16f)
             .v (PID::macroCharacter, 0.34f).v (PID::macroMotion, 0.24f)
@@ -634,11 +651,12 @@ namespace nacar::presets::detail
             .route (srcBreath, PID::bodyAmount, 0.12f)
             .route (srcOrganic, PID::oscAFine, 0.06f));
 
-        // A triangle carrier, a low PM index, and DUST confined to the
-        // attack as the exciter.
+        // A triangle carrier, a PM index that Env 2 takes 170 ms to give
+        // back - a tine rings longer than a struck bar does - and DUST
+        // confined to the attack as the exciter.
         add (out, Build ("Dedal", "PLUCKS", "INTIMATE",
                          "thumb piano,close,short,mallet",
-                         "A triangle carrier at a modest phase-modulation index with a dust exciter confined to the attack.")
+                         "A triangle carrier phase-modulated from a fifth above, with the index handed to Env 2 and a dust exciter confined to the attack.")
             .at (72, 1, 0.74f, 2.5)
             .chain ("RETRO,CRUSH,FILTER,GRAIN,SPACE,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -649,7 +667,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.08f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 7.0f)
             .v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscPmAmount, 0.24f)
+            .v (PID::oscPmAmount, 0.12f).v (PID::pmEnvAmount, 0.46f)
             .v (PID::subLevel, 0.16f).v (PID::subHarmonics, 0.24f)
             .v (PID::noiseType, ch::nDust).v (PID::noiseLevel, 0.20f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -659,12 +677,14 @@ namespace nacar::presets::detail
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 3400.0f).v (PID::filterResonance, 0.16f)
             .v (PID::filterDrive, 0.18f).v (PID::filterKeyTrack, 0.95f)
-            .v (PID::filterEnvAmount, 0.50f).v (PID::filterVelAmount, 0.58f)
+            .v (PID::filterEnvAmount, 0.24f).v (PID::filterVelAmount, 0.58f)
             .v (PID::ampAttack, 0.0006f).v (PID::ampDecay, 0.34f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.14f)
             .v (PID::ampVelocity, 0.74f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.07f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.001f).v (PID::env2Decay, 0.17f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.12f)
             .v (PID::macroMemory, 0.22f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.32f).v (PID::memoryWobble, 0.18f)
             .v (PID::macroCharacter, 0.28f).v (PID::macroMotion, 0.22f)
@@ -695,9 +715,15 @@ namespace nacar::presets::detail
 
         // Aura is at 0.82 decay and Space is a one-second room: the
         // atmosphere panel, not the reverb, is what holds this open.
+        //
+        // The short Env 2 here is a deliberate trade.  On the FORMANT model
+        // envelope 2 also morphs the vowel, so the slow one-way creep the
+        // default envelope gives is exchanged for a vowel that opens on the
+        // strike and shuts with the index.  On a mallet that is the gesture
+        // worth having; Rosario, further up, keeps the slow version instead.
         add (out, Build ("Gota de Plata", "PLUCKS", "COLD",
                          "mallet,formant,aura,glass",
-                         "A struck triangle read through a formant filter, with Aura and not the reverb holding the length.")
+                         "A struck triangle whose phase-modulation index is handed to Env 2, read through a formant filter, with Aura and not the reverb holding the length.")
             .at (71, 1, 0.78f, 3.0)
             .chain ("CRUSH,RETRO,FILTER,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -707,7 +733,7 @@ namespace nacar::presets::detail
             .v (PID::oscAPhase, ch::phaseReset)
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.10f)
             .v (PID::oscBOctave, 2.0f).v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscPmAmount, 0.30f)
+            .v (PID::oscPmAmount, 0.14f).v (PID::pmEnvAmount, 0.52f)
             .v (PID::oscCWave, ch::sine).v (PID::oscCLevel, 0.16f)
             .v (PID::oscCOctave, 2.0f).v (PID::oscCPan, 0.25f)
             .v (PID::subLevel, 0.08f)
@@ -717,7 +743,7 @@ namespace nacar::presets::detail
             .v (PID::postSaturation, 0.08f).v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fFormant).v (PID::filterType, ch::bp)
             .v (PID::filterCutoff, 2100.0f).v (PID::filterResonance, 0.30f)
-            .v (PID::filterKeyTrack, 0.45f).v (PID::filterEnvAmount, 0.44f)
+            .v (PID::filterKeyTrack, 0.45f).v (PID::filterEnvAmount, 0.26f)
             .v (PID::filterVelAmount, 0.56f)
             .v (PID::filter2On, 1.0f).v (PID::filter2Type, ch::f2Bp)
             .v (PID::filter2Cutoff, 5200.0f).v (PID::filter2Res, 0.28f)
@@ -727,6 +753,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.70f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.06f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.12f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.10f)
             .v (PID::macroMemory, 0.16f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.26f).v (PID::memoryWobble, 0.14f)
             .v (PID::macroCharacter, 0.22f).v (PID::macroMotion, 0.30f)
@@ -1190,11 +1218,21 @@ namespace nacar::presets::detail
             .route (srcOrganic, PID::filterResonance, 0.10f));
 
         // ---- glassy, digital and FM ----------------------------------
-        // True FM rather than PM, and a 520 Hz high pass in the creative
-        // slot so nothing of the body reaches the chain.
+        // Two modulation paths from the same oscillator B.  The FM index is
+        // fixed and is the steady part of the timbre; the PM index is zero
+        // at rest and exists only while Env 2 is open, which is the strike.
+        // A glassy FM tone can hold its index longer than a mallet can, so
+        // Env 2 is 260 ms here against the marimba's seventy.
+        //
+        // The primary filter's envelope is at zero on purpose: the cutoff
+        // already sits at 9 kHz with full key tracking, so the two and a
+        // half octaves the old 0.42 asked for ran into the filter's own
+        // ceiling and shaped almost nothing.  It was standing in for a
+        // falling index, and the index is real now.  The 520 Hz high pass in
+        // the creative slot still keeps the body out of the chain.
         add (out, Build ("Cut Glass", "PLUCKS", "COLD",
                          "fm,brittle,high pass,digital",
-                         "Oscillator B frequency-modulates A at audio rate, and a high pass in the creative slot takes the body out from under it.")
+                         "Oscillator B frequency-modulates A at a fixed index and phase-modulates it at one Env 2 gives back, over a high pass that takes the body out from under it.")
             .at (71, 1, 0.84f, 2.5)
             .chain ("CRUSH,FILTER,RETRO,GRAIN,SPACE,REWIND")
             .v (PID::synthCharacter, ch::mirage)
@@ -1205,7 +1243,7 @@ namespace nacar::presets::detail
             .v (PID::oscBWave, ch::sine).v (PID::oscBLevel, 0.06f)
             .v (PID::oscBOctave, 1.0f).v (PID::oscBSemi, 7.0f)
             .v (PID::oscBPhase, ch::phaseReset)
-            .v (PID::oscFmAmount, 0.34f)
+            .v (PID::oscFmAmount, 0.24f).v (PID::pmEnvAmount, 0.60f)
             .v (PID::subLevel, 0.0f)
             .v (PID::noiseType, ch::nDigital).v (PID::noiseLevel, 0.10f)
             .v (PID::noiseAttackOnly, 1.0f)
@@ -1213,7 +1251,7 @@ namespace nacar::presets::detail
             .v (PID::postSaturation, 0.10f).v (PID::postSatMode, ch::satEdge)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 9000.0f).v (PID::filterResonance, 0.16f)
-            .v (PID::filterKeyTrack, 1.0f).v (PID::filterEnvAmount, 0.42f)
+            .v (PID::filterKeyTrack, 1.0f).v (PID::filterEnvAmount, 0.0f)
             .v (PID::filterVelAmount, 0.60f)
             .v (PID::filter2On, 1.0f).v (PID::filter2Type, ch::f2Hp)
             .v (PID::filter2Cutoff, 520.0f).v (PID::filter2Res, 0.20f)
@@ -1223,6 +1261,8 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.76f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.07f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::env2Attack, 0.0008f).v (PID::env2Decay, 0.26f)
+            .v (PID::env2Sustain, 0.0f).v (PID::env2Release, 0.14f)
             .v (PID::crushOn, 1.0f).v (PID::crushAmount, 0.22f)
             .v (PID::crushBits, 12.0f).v (PID::crushRate, 26000.0f)
             .v (PID::crushTone, 0.28f).v (PID::crushMix, 0.32f)

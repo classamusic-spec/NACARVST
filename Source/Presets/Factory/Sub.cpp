@@ -187,16 +187,18 @@ namespace nacar::presets::detail
 
         // The workhorse: one sine, a long decay towards silence, and the
         // harmonics coming entirely from DENSE saturation and the drive in
-        // front of the ladder.  Glide is short, so a legato line arrives at
-        // the note from just under it.
+        // front of the ladder.  Envelope 2 puts ten semitones into the pitch
+        // and takes them back over a tenth of a second, so the note starts
+        // above itself and settles onto the key.  The glide that is left is
+        // the legato join between notes, which is the only job it still has.
         add (out, Build ("Gravedad", "SUB", "DARK",
-                         "808,saturated,legato,long",
-                         "A sine driven into DENSE saturation with a three-second decay and a short glide.")
+                         "808,saturated,drop,long",
+                         "A sine driven into DENSE saturation with a ten-semitone pitch envelope on the attack and a three-second decay.")
             .at (28, 1, 0.98f, 4.0)
             .chain ("FILTER,CRUSH,RETRO,SPACE,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
             .v (PID::voiceMode, ch::legato).v (PID::polyphony, 1.0f)
-            .v (PID::glideTime, 0.05f)
+            .v (PID::glideTime, 0.03f)
             .v (PID::voiceVariation, 0.06f).v (PID::driftAmount, 0.05f)
             .v (PID::oscAWave, ch::sine).v (PID::oscALevel, 0.86f)
             .v (PID::oscAPhase, ch::phaseReset)
@@ -204,18 +206,21 @@ namespace nacar::presets::detail
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.52f)
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.38f)
             .v (PID::bodyAmount, 0.44f).v (PID::bodyTilt, -0.10f)
-            .v (PID::densityAmount, 0.30f)
+            .v (PID::densityAmount, 0.35f)
             .v (PID::preFilterDrive, 0.38f).v (PID::postSaturation, 0.44f)
             .v (PID::postSatMode, ch::satDense)
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 340.0f).v (PID::filterResonance, 0.10f)
             .v (PID::filterDrive, 0.36f).v (PID::filterKeyTrack, 0.18f)
-            .v (PID::filterEnvAmount, 0.34f).v (PID::filterVelAmount, 0.30f)
+            .v (PID::filterEnvAmount, 0.18f).v (PID::filterVelAmount, 0.30f)
             .v (PID::ampAttack, 0.004f).v (PID::ampDecay, 3.2f)
             .v (PID::ampSustain, 0.18f).v (PID::ampRelease, 0.60f)
             .v (PID::ampVelocity, 0.38f)
             .v (PID::env1Attack, 0.0008f).v (PID::env1Decay, 0.09f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.08f)
+            .v (PID::pitchEnvAmount, 10.0f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.10f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.14f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.24f).v (PID::memoryWobble, 0.06f)
             .v (PID::memoryAsymmetry, 0.0f)
@@ -246,13 +251,16 @@ namespace nacar::presets::detail
             .route (srcTouch, PID::preFilterDrive, 0.18f)
             .route (srcWheel, PID::filterCutoff, 0.20f));
 
-        // The same idea with the glide long enough to be the gesture rather
-        // than the join, the drive backed off, and the decay stretched to
-        // five seconds.  HAZE instead of the ladder, so the top of the note
-        // stays where the saturation put it.
+        // The same idea with the drive backed off and the decay stretched to
+        // five seconds, so the pitch envelope is shallow and slow to match:
+        // six semitones given back over a fifth of a second.  The third of a
+        // second of portamento stays, because on this one the glide is the
+        // note-to-note gesture and not a stand-in for the attack.  HAZE
+        // instead of the ladder, so the top of the note stays where the
+        // saturation put it.
         add (out, Build ("Plomada", "SUB", "MINIMAL",
-                         "808,glide,long,soft",
-                         "A sine with a third of a second of portamento and a five-second decay, through HAZE.")
+                         "808,glide,drop,soft",
+                         "A sine with a six-semitone pitch envelope, a third of a second of portamento between notes and a five-second decay, through HAZE.")
             .at (26, 1, 0.94f, 4.0)
             .chain ("RETRO,SPACE,FILTER,CRUSH,REWIND,GRAIN")
             .v (PID::synthCharacter, ch::mass)
@@ -265,7 +273,7 @@ namespace nacar::presets::detail
             .v (PID::oscBOctave, 1.0f).v (PID::oscBFine, 0.0f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.50f)
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.26f)
-            .v (PID::bodyAmount, 0.34f).v (PID::densityAmount, 0.22f)
+            .v (PID::bodyAmount, 0.34f).v (PID::densityAmount, 0.27f)
             .v (PID::preFilterDrive, 0.20f).v (PID::postSaturation, 0.26f)
             .v (PID::postSatMode, ch::satWarm)
             .v (PID::filterModel, ch::fHaze).v (PID::filterType, ch::lp)
@@ -277,6 +285,9 @@ namespace nacar::presets::detail
             .v (PID::ampVelocity, 0.34f)
             .v (PID::env1Attack, 0.002f).v (PID::env1Decay, 0.30f)
             .v (PID::env1Sustain, 0.0f)
+            .v (PID::pitchEnvAmount, 6.0f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.20f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.18f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.30f).v (PID::memoryWobble, 0.08f)
             .v (PID::memoryAsymmetry, 0.0f)
@@ -307,16 +318,18 @@ namespace nacar::presets::detail
             .route (srcWheel, PID::glideTime, 0.30f));
 
         // The hard end of the same family.  Drive in front of the ladder,
-        // EDGE saturation behind it and the quantiser first in the chain,
-        // so the harmonics are made before anything gets to smooth them.
+        // EDGE saturation behind it and the quantiser first in the chain, so
+        // the harmonics are made before anything gets to smooth them, and
+        // eighteen semitones of pitch envelope over fifty-five milliseconds
+        // to arrive with.  No glide at all now: the twenty milliseconds it
+        // carried were only there to bend the note into place.
         add (out, Build ("Peso Muerto", "SUB", "AGGRESSIVE",
-                         "808,drive,edge,crushed",
-                         "A sine pushed through drive, EDGE saturation and a nine-bit quantiser placed first in the chain.")
+                         "808,drop,edge,crushed",
+                         "A sine with an eighteen-semitone pitch envelope, pushed through drive, EDGE saturation and a nine-bit quantiser placed first in the chain.")
             .at (24, 1, 1.0f, 3.0)
             .chain ("CRUSH,FILTER,RETRO,SPACE,REWIND,GRAIN")
             .v (PID::synthCharacter, ch::mass)
             .v (PID::voiceMode, ch::mono).v (PID::polyphony, 1.0f)
-            .v (PID::glideTime, 0.02f)
             .v (PID::voiceVariation, 0.06f).v (PID::driftAmount, 0.06f)
             .v (PID::oscAWave, ch::sine).v (PID::oscALevel, 0.88f)
             .v (PID::oscAPhase, ch::phaseReset)
@@ -324,18 +337,21 @@ namespace nacar::presets::detail
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.46f)
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.55f)
             .v (PID::bodyAmount, 0.56f).v (PID::bodyTilt, 0.18f)
-            .v (PID::densityAmount, 0.44f)
+            .v (PID::densityAmount, 0.49f)
             .v (PID::preFilterDrive, 0.66f).v (PID::postSaturation, 0.58f)
             .v (PID::postSatMode, ch::satEdge)
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 420.0f).v (PID::filterResonance, 0.14f)
             .v (PID::filterDrive, 0.58f).v (PID::filterKeyTrack, 0.20f)
-            .v (PID::filterEnvAmount, 0.40f).v (PID::filterVelAmount, 0.35f)
+            .v (PID::filterEnvAmount, 0.22f).v (PID::filterVelAmount, 0.35f)
             .v (PID::ampAttack, 0.002f).v (PID::ampDecay, 2.0f)
             .v (PID::ampSustain, 0.10f).v (PID::ampRelease, 0.35f)
             .v (PID::ampVelocity, 0.45f)
             .v (PID::env1Attack, 0.0006f).v (PID::env1Decay, 0.07f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.06f)
+            .v (PID::pitchEnvAmount, 18.0f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.055f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.10f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.18f).v (PID::memoryWobble, 0.04f)
             .v (PID::memoryAsymmetry, 0.0f)
@@ -369,10 +385,13 @@ namespace nacar::presets::detail
 
         // Seven seconds of decay to nothing, almost no drive, and a notch
         // at 220 Hz so the fundamental and the octave above it stop sharing
-        // the same space.  The one in the group that is all tail.
+        // the same space.  The one in the group that is all tail, so its
+        // pitch envelope is the shallowest and the slowest of the five: five
+        // semitones given back over three tenths of a second.  It never had
+        // a glide and does not need one.
         add (out, Build ("Lastre", "SUB", "COLD",
-                         "long,decay,notch,clean",
-                         "A sine with a seven-second decay to silence and a notch at 220 Hz separating the fundamental from its octave.")
+                         "drop,long,notch,clean",
+                         "A sine with a five-semitone pitch envelope, a seven-second decay to silence and a notch at 220 Hz separating the fundamental from its octave.")
             .at (26, 1, 0.90f, 4.0)
             .chain ("FILTER,SPACE,CRUSH,RETRO,GRAIN,REWIND")
             .v (PID::synthCharacter, ch::mass)
@@ -383,7 +402,7 @@ namespace nacar::presets::detail
             .v (PID::oscBLevel, 0.0f)
             .v (PID::subWave, ch::subSine).v (PID::subLevel, 0.56f)
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.20f)
-            .v (PID::bodyAmount, 0.28f).v (PID::densityAmount, 0.16f)
+            .v (PID::bodyAmount, 0.28f).v (PID::densityAmount, 0.21f)
             .v (PID::preFilterDrive, 0.14f).v (PID::postSaturation, 0.30f)
             .v (PID::postSatMode, ch::satSoft)
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
@@ -397,6 +416,9 @@ namespace nacar::presets::detail
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 1.40f)
             .v (PID::ampVelocity, 0.30f)
             .v (PID::env1Decay, 0.50f).v (PID::env1Sustain, 0.0f)
+            .v (PID::pitchEnvAmount, 5.0f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.30f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.22f).v (PID::memoryGen, ch::genII)
             .v (PID::memoryBandwidth, 0.40f).v (PID::memoryWobble, 0.10f)
             .v (PID::memoryDiffusion, 0.12f).v (PID::memoryAsymmetry, 0.0f)
@@ -424,7 +446,7 @@ namespace nacar::presets::detail
             .v (PID::breathAmount, 0.10f).v (PID::breathSpeed, 0.04f)
             .v (PID::lfo1Shape, ch::lfoSine).v (PID::lfo1Rate, 0.08f)
             .v (PID::lfo1Depth, 0.40f)
-            .v (PID::masterGain, -1.0f)
+            .v (PID::masterGain, -1.5f)
             .route (srcBreath, PID::filterCutoff, 0.03f)
             .route (srcLfo1, PID::weightHarmonics, 0.10f));
 
@@ -975,12 +997,15 @@ namespace nacar::presets::detail
             .route (srcBreath, PID::oscRingMod, 0.08f)
             .route (srcTouch, PID::oscCLevel, 0.18f));
 
-        // A third of a second and gone: sustain at zero, a fifty-millisecond
-        // envelope on the cutoff and a dark noise burst confined to the
-        // attack.  For low end that has to leave room between the notes.
+        // A third of a second and gone: sustain at zero, a dark noise burst
+        // confined to the attack, and fourteen semitones of pitch envelope
+        // given back over forty-five milliseconds, which is where the knock
+        // comes from.  The envelope on the cutoff is backed off to match -
+        // it shapes brightness now rather than standing in for a fall.  For
+        // low end that has to leave room between the notes.
         add (out, Build ("Pisada", "SUB", "MINIMAL",
-                         "pluck,short,gated,rhythmic",
-                         "A sub with the amplitude sustain at zero, a 340 ms decay and a noise burst confined to the attack.")
+                         "pluck,short,drop,gated",
+                         "A sub with the amplitude sustain at zero, a 340 ms decay, a fourteen-semitone pitch envelope and a noise burst confined to the attack.")
             .at (31, 1, 0.95f, 2.5)
             .chain ("FILTER,CRUSH,REWIND,RETRO,SPACE,GRAIN")
             .v (PID::synthCharacter, ch::mass)
@@ -993,18 +1018,21 @@ namespace nacar::presets::detail
             .v (PID::subOctave, ch::subMinus1).v (PID::subHarmonics, 0.42f)
             .v (PID::noiseType, ch::nDark).v (PID::noiseLevel, 0.14f)
             .v (PID::noiseAttackOnly, 1.0f)
-            .v (PID::bodyAmount, 0.40f).v (PID::densityAmount, 0.24f)
+            .v (PID::bodyAmount, 0.40f).v (PID::densityAmount, 0.29f)
             .v (PID::preFilterDrive, 0.28f).v (PID::postSaturation, 0.24f)
             .v (PID::postSatMode, ch::satDense)
             .v (PID::filterModel, ch::fMass).v (PID::filterType, ch::lp)
             .v (PID::filterCutoff, 480.0f).v (PID::filterResonance, 0.20f)
             .v (PID::filterDrive, 0.30f).v (PID::filterKeyTrack, 0.30f)
-            .v (PID::filterEnvAmount, 0.60f).v (PID::filterVelAmount, 0.50f)
+            .v (PID::filterEnvAmount, 0.40f).v (PID::filterVelAmount, 0.50f)
             .v (PID::ampAttack, 0.001f).v (PID::ampDecay, 0.34f)
             .v (PID::ampSustain, 0.0f).v (PID::ampRelease, 0.10f)
             .v (PID::ampVelocity, 0.72f)
             .v (PID::env1Attack, 0.0005f).v (PID::env1Decay, 0.05f)
             .v (PID::env1Sustain, 0.0f).v (PID::env1Release, 0.04f)
+            .v (PID::pitchEnvAmount, 14.0f)
+            .v (PID::env2Attack, 0.0005f).v (PID::env2Decay, 0.045f)
+            .v (PID::env2Sustain, 0.0f)
             .v (PID::macroMemory, 0.12f).v (PID::memoryGen, ch::genI)
             .v (PID::memoryBandwidth, 0.20f).v (PID::memoryWobble, 0.05f)
             .v (PID::memoryAsymmetry, 0.0f)
@@ -1027,7 +1055,7 @@ namespace nacar::presets::detail
             .v (PID::synthWidth, 0.34f).v (PID::highWidth, 0.58f)
             .v (PID::lowMonoFreq, 350.0f)
             .v (PID::breathAmount, 0.10f).v (PID::breathSpeed, 0.14f)
-            .v (PID::masterGain, -1.5f)
+            .v (PID::masterGain, -2.0f)
             .route (srcTouch, PID::ampDecay, 0.16f)
             .route (srcWheel, PID::filterCutoff, 0.18f));
 

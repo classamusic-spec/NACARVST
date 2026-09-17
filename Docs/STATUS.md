@@ -206,6 +206,13 @@ engine's own position instead of running a UI timer. `Tests/SequencerTests.cpp`
 measures all of that, including that switching a lane off gives the parameter
 back rather than freezing it at the last step.
 
+Two things to know before reaching for it. A step value is **absolute over its
+target's whole range** - the step well draws 0 to 100% and the locked interface
+has nowhere to put a per-lane depth control - so a lane on a filter cutoff is a
+strong statement rather than a gentle one. And **nothing creates the SEQUENCER
+branch until the SEQ page is opened once**, so a fresh session publishes four
+empty lanes and the sequencer is inert until the page is visited.
+
 Nobody has heard it. What is claimed here is what the code does and what the
 tests measure.
 

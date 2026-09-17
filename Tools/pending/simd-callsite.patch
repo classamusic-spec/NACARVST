@@ -1,0 +1,98 @@
+--- tree-scalar/Source/Audio/Sources/Synth/SynthVoice.h	2026-09-17 15:04:42.591564312 +0000
++++ tree-simd/Source/Audio/Sources/Synth/SynthVoice.h	2026-09-17 15:29:54.918882006 +0000
+@@ -67,17 +67,13 @@
+     private:
+         struct OscState
+         {
+-            AnalogOscillator sub[kMaxUnison];
++            UnisonOscillatorBank bank;
+             UnisonLayout layout;
+ 
+-            // Everything below is constant across a block and is computed once,
+-            // in prepareOscBlock().  Recomputing them per sample cost more than
+-            // the oscillators themselves.
+-            float detuneRatio[kMaxUnison] {};   ///< cents converted to a ratio
+-            float panL[kMaxUnison] {};
+-            float panR[kMaxUnison] {};
+-            float panLStep[kMaxUnison] {};      ///< so pan still moves smoothly
+-            float panRStep[kMaxUnison] {};
++            // The detune ratio and the pan ramp now live in the bank, which
++            // owns them aligned so that a vector load can reach them.  They are
++            // still written once per block, in prepareOscBlock(), and are still
++            // constant across it.
+ 
+             float pitchRatio = 1.0f;            ///< the oscillator's own offset
+             float normalisation = 1.0f;
+--- tree-scalar/Source/Audio/Sources/Synth/SynthVoice.cpp	2026-09-17 15:05:46.911568135 +0000
++++ tree-simd/Source/Audio/Sources/Synth/SynthVoice.cpp	2026-09-17 15:29:54.919104857 +0000
+@@ -9,8 +9,7 @@
+         voiceIndex = index;
+ 
+         for (auto* o : { &oscA, &oscB, &oscC })
+-            for (auto& s : o->sub)
+-                s.prepare (sr);
++            o->bank.prepare (sr);
+ 
+         subOsc.prepare (sr);
+         noise.prepare (sr, (juce::uint32) (index * 7919 + 13));
+@@ -125,8 +124,8 @@
+     {
+         for (auto* o : { &oscA, &oscB, &oscC })
+         {
+-            for (auto& s : o->sub)
+-                s.reset (0.0f);
++            for (int v = 0; v < kMaxUnison; ++v)
++                o->bank.reset (v, 0.0f);
+ 
+             o->builtCount = 0;
+             o->builtDetune = -1.0f;
+@@ -208,7 +207,7 @@
+                     const float ph = startPhaseFor (s, i, st.layout.phase[i]);
+ 
+                     if (ph >= 0.0f)
+-                        st.sub[i].reset (ph);
++                        st.bank.reset (i, ph);
+                 }
+             };
+ 
+@@ -317,7 +316,7 @@
+ 
+         for (int v = 0; v < n; ++v)
+         {
+-            st.detuneRatio[v] = centsToRatio (st.layout.detune[v] * detuneCents);
++            st.bank.detuneRatio[v] = centsToRatio (st.layout.detune[v] * detuneCents);
+ 
+             const float offset = st.layout.pan[v] * spread;
+ 
+@@ -325,10 +324,10 @@
+             panGains (juce::jlimit (-1.0f, 1.0f, panStart + offset), l0, r0);
+             panGains (juce::jlimit (-1.0f, 1.0f, panEnd   + offset), l1, r1);
+ 
+-            st.panL[v] = l0;
+-            st.panR[v] = r0;
+-            st.panLStep[v] = (l1 - l0) / (float) numSamples;
+-            st.panRStep[v] = (r1 - r0) / (float) numSamples;
++            st.bank.panL[v] = l0;
++            st.bank.panR[v] = r0;
++            st.bank.panLStep[v] = (l1 - l0) / (float) numSamples;
++            st.bank.panRStep[v] = (r1 - r0) / (float) numSamples;
+         }
+     }
+ 
+@@ -404,15 +403,7 @@
+ 
+         float mono = 0.0f, l = 0.0f, r = 0.0f;
+ 
+-        for (int v = 0; v < n; ++v)
+-        {
+-            const float inc = f0 * st.detuneRatio[v] * invSr;
+-            const float y = st.sub[v].process (s.wave, inc, pw, phaseMod, syncFrac, wt);
+-
+-            mono += y;
+-            l += y * (st.panL[v] + st.panLStep[v] * fi);
+-            r += y * (st.panR[v] + st.panRStep[v] * fi);
+-        }
++        st.bank.render (s.wave, n, f0, invSr, pw, phaseMod, syncFrac, wt, fi, mono, l, r);
+ 
+         const float g = st.normalisation;
+ 

@@ -5301,6 +5301,31 @@ public:
             }
         }
 
+        beginTest ("each category occupies one contiguous run, so no preset is in the wrong file");
+        {
+            // factoryLibrary() calls one builder per category, in order, and
+            // each builder is its own translation unit. So a category word
+            // appearing in two separate runs means a preset is in a file it
+            // does not belong to - which is not cosmetic: it is a KEYS patch
+            // the browser files under BASS, and it is exactly what happened
+            // when concurrent work staged itself through shared filenames.
+            juce::StringArray runs;
+
+            for (const auto& preset : library)
+                if (runs.isEmpty() || runs.strings.getLast() != preset.category)
+                    runs.add (preset.category);
+
+            for (int i = 0; i < runs.size(); ++i)
+            {
+                juce::StringArray rest (runs);
+                rest.remove (i);
+
+                expect (! rest.contains (runs[i]),
+                        "category " + runs[i] + " appears in more than one run: a preset of that "
+                        "category is in another category's file");
+            }
+        }
+
         beginTest ("every preset says what it is: tags, a blurb, and enough decisions to be one");
         {
             for (const auto& preset : library)
@@ -5461,6 +5486,75 @@ public:
                                 + juce::String (value.value) + " and applies as " + juce::String (applied));
                 }
             }
+        }
+
+        beginTest ("a fresh session opens on the patch it names, not on the raw defaults");
+        {
+            // The default session writes a preset name into its PRESET branch.
+            // Until the processor actually applied that preset, the header bar
+            // named a patch that had never been loaded - the instrument saying
+            // something untrue about itself before the user had touched it.
+            //
+            // The processor's constructor cannot be linked into this runner, so
+            // what is tested is the function it calls. The one line calling it
+            // is all that remains untested.
+            TestHost host;
+            StateManager state (host.apvts);
+
+            const juce::String name (StateManager::defaultPresetName);
+
+            const auto& library = presets::factoryLibrary();
+            const auto match = std::find_if (library.begin(), library.end(),
+                                             [&name] (const presets::FactoryPreset& p)
+                                             { return p.name == name; });
+
+            expect (match != library.end(),
+                    "the default session names \"" + name + "\", which is not in the factory library");
+
+            if (match == library.end())
+                return;
+
+            expect (PresetManager::applyFactoryPresetByName (host.registry, state, name),
+                    "applying the default preset by name failed");
+
+            // Its parameters are in force.
+            for (const auto& value : match->values)
+            {
+                const auto& d = ParameterRegistry::definition (value.pid);
+                const float applied = host.registry.userValue (value.pid);
+
+                const float tolerance = d.kind == ParamKind::floatValue
+                                      ? juce::jmax (1.0e-3f, std::abs (value.value) * 1.0e-3f)
+                                      : 0.01f;
+
+                expect (std::abs (applied - value.value) <= tolerance,
+                        juce::String (d.id) + " did not survive opening the default session");
+            }
+
+            // Its chain order and its routings are in the session, so the FX
+            // page and the MOD page show what is actually running.
+            const auto chain = state.group (ids::FXCHAIN);
+
+            if (match->fxOrder.isNotEmpty())
+                expect (chain.getProperty (ids::fxOrder).toString() == match->fxOrder,
+                        "the default session did not take the preset's chain order");
+
+            const auto matrix = state.group (ids::MODMATRIX);
+            int enabled = 0;
+
+            for (int i = 0; i < matrix.getNumChildren(); ++i)
+                enabled += (bool) matrix.getChild (i).getProperty (ids::modEnabled) ? 1 : 0;
+
+            expect (enabled == (int) match->mods.size(),
+                    "the default session has " + juce::String (enabled) + " routings enabled, and the preset has "
+                        + juce::String ((int) match->mods.size()));
+
+            // And the header is describing the thing that is loaded.
+            const auto preset = state.group (ids::PRESET);
+
+            expect (preset.getProperty (ids::presetName).toString() == match->name, "the header names the wrong preset");
+            expect (preset.getProperty (ids::presetCategory).toString() == match->category, "the header shows the wrong category");
+            expect (preset.getProperty (ids::presetMood).toString() == match->mood, "the header shows the wrong mood");
         }
     }
 };

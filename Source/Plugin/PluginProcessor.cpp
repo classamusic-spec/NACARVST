@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "../Presets/PresetManager.h"
 
 namespace nacar
 {
@@ -10,6 +11,18 @@ namespace nacar
           stateManager (apvts)
     {
         registry.attach (apvts);
+
+        // Open on the patch the default session names.
+        //
+        // Without this the header bar says "Niebla en la Ciudad" over the
+        // parameter list's raw defaults, which is the instrument telling the
+        // user something untrue about itself before they have touched it.
+        // The name lives in StateManager so there is one of it; if it ever
+        // stops matching a factory preset this returns false and the session
+        // is left on the defaults - honestly wrong rather than dishonestly
+        // right - and the test suite fails, which is where that should surface.
+        PresetManager::applyFactoryPresetByName (registry, stateManager,
+                                                 StateManager::defaultPresetName);
 
         // The sample SOURCE reads whatever the loader has published.  Pointed
         // at the slot here, once: nothing below this line changes it, and the

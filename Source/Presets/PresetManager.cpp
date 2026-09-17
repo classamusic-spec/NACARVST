@@ -208,41 +208,8 @@ namespace nacar
         // 1. the parameters, through the gesture protocol.
         applyParameters (registry, payload);
 
-        // 2. the chain order.  The processor listens to this tree and
-        //    republishes the packed order to the audio thread itself.
-        auto chain = state.group (ids::FXCHAIN);
-        chain.setProperty (ids::fxOrder, fxOrderOf (payload), nullptr);
-        chain.setProperty ("fxBypass", "", nullptr);
-
-        // 3. the modulation matrix, written INTO the existing slot nodes
-        //    rather than over them.  The MOD page caches one ValueTree handle
-        //    per row and only re-fetches when the MODMATRIX node itself is
-        //    replaced, so swapping the children out would leave its eight rows
-        //    holding trees that are no longer in the session - the page would
-        //    show the old routings and editing one would reach nothing.
-        //    Setting the properties in place also fires the property-changed
-        //    callback the processor uses to republish the matrix.
-        {
-            auto matrix = state.group (ids::MODMATRIX);
-            const auto replacement = makeModMatrixTree (payload);
-
-            while (matrix.getNumChildren() > replacement.getNumChildren())
-                matrix.removeChild (matrix.getNumChildren() - 1, nullptr);
-
-            while (matrix.getNumChildren() < replacement.getNumChildren())
-                matrix.addChild (juce::ValueTree (ids::MODSLOT), -1, nullptr);
-
-            for (int i = 0; i < replacement.getNumChildren(); ++i)
-            {
-                auto dst = matrix.getChild (i);
-                const auto src = replacement.getChild (i);
-
-                dst.setProperty (ids::modSource,  src.getProperty (ids::modSource),  nullptr);
-                dst.setProperty (ids::modTarget,  src.getProperty (ids::modTarget),  nullptr);
-                dst.setProperty (ids::modDepth,   src.getProperty (ids::modDepth),   nullptr);
-                dst.setProperty (ids::modEnabled, src.getProperty (ids::modEnabled), nullptr);
-            }
-        }
+        // 2 and 3. the chain order and the modulation matrix.
+        writePayloadToSession (state, payload);
 
         // 4. identity, so the header bar and the next session save agree with
         //    what is actually loaded.
@@ -269,6 +236,73 @@ namespace nacar
             next += n;
 
         return apply (next);
+    }
+
+    void PresetManager::writePayloadToSession (StateManager& state, const Payload& payload)
+    {
+        // The chain order.  The processor listens to this tree and republishes
+        // the packed order to the audio thread itself.
+        auto chain = state.group (ids::FXCHAIN);
+        chain.setProperty (ids::fxOrder, fxOrderOf (payload), nullptr);
+        chain.setProperty ("fxBypass", "", nullptr);
+
+        // The modulation matrix, written INTO the existing slot nodes rather
+        // than over them.  The MOD page caches one ValueTree handle per row and
+        // only re-fetches when the MODMATRIX node itself is replaced, so
+        // swapping the children out would leave its eight rows holding trees
+        // that are no longer in the session - the page would show the old
+        // routings and editing one would reach nothing.  Setting the properties
+        // in place also fires the property-changed callback the processor uses
+        // to republish the matrix.
+        auto matrix = state.group (ids::MODMATRIX);
+        const auto replacement = makeModMatrixTree (payload);
+
+        while (matrix.getNumChildren() > replacement.getNumChildren())
+            matrix.removeChild (matrix.getNumChildren() - 1, nullptr);
+
+        while (matrix.getNumChildren() < replacement.getNumChildren())
+            matrix.addChild (juce::ValueTree (ids::MODSLOT), -1, nullptr);
+
+        for (int i = 0; i < replacement.getNumChildren(); ++i)
+        {
+            auto dst = matrix.getChild (i);
+            const auto src = replacement.getChild (i);
+
+            dst.setProperty (ids::modSource,  src.getProperty (ids::modSource),  nullptr);
+            dst.setProperty (ids::modTarget,  src.getProperty (ids::modTarget),  nullptr);
+            dst.setProperty (ids::modDepth,   src.getProperty (ids::modDepth),   nullptr);
+            dst.setProperty (ids::modEnabled, src.getProperty (ids::modEnabled), nullptr);
+        }
+    }
+
+    bool PresetManager::applyFactoryPresetByName (const ParameterRegistry& registry,
+                                                  StateManager& state,
+                                                  const juce::String& name)
+    {
+        const auto& factory = presets::factoryLibrary();
+
+        const auto match = std::find_if (factory.begin(), factory.end(),
+                                         [&name] (const presets::FactoryPreset& p)
+                                         { return p.name == name; });
+
+        if (match == factory.end())
+            return false;
+
+        const auto payload = payloadOf (*match);
+
+        applyParameters (registry, payload);
+        writePayloadToSession (state, payload);
+
+        auto preset = state.group (ids::PRESET);
+
+        preset.setProperty (ids::presetName,      match->name, nullptr);
+        preset.setProperty (ids::presetAuthor,    presets::factoryAuthor(), nullptr);
+        preset.setProperty (ids::presetCategory,  match->category, nullptr);
+        preset.setProperty (ids::presetMood,      match->mood, nullptr);
+        preset.setProperty (ids::presetTags,      match->tags.joinIntoString (","), nullptr);
+        preset.setProperty (ids::presetFavourite, false, nullptr);
+
+        return true;
     }
 
     void PresetManager::writeIdentityToSession (const PresetInfo& info)

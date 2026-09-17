@@ -20,7 +20,7 @@ namespace nacar
        #endif
 
         juce::ValueTree preset (ids::PRESET);
-        preset.setProperty (ids::presetName,      "Niebla en la Ciudad", nullptr);
+        preset.setProperty (ids::presetName,      defaultPresetName, nullptr);
         preset.setProperty (ids::presetAuthor,    "NACAR", nullptr);
         preset.setProperty (ids::presetCategory,  "PADS", nullptr);
         preset.setProperty (ids::presetMood,      "MYSTERIOUS", nullptr);

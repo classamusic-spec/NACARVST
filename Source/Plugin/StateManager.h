@@ -128,6 +128,14 @@ namespace nacar
         /** Bump this whenever the shape of the SESSION tree changes. */
         static constexpr int currentSchemaVersion = 1;
 
+        /** The factory preset a fresh session opens on.
+
+            It is named here rather than typed into makeDefaultSession(),
+            because the processor has to apply the same one at construction -
+            a default session that NAMES a patch it has not loaded is a header
+            bar telling the user something untrue. */
+        static constexpr const char* defaultPresetName = "Niebla en la Ciudad";
+
         explicit StateManager (juce::AudioProcessorValueTreeState&);
 
         /** The mutable non-parameter tree.  Message thread only. */

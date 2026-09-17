@@ -153,6 +153,31 @@ namespace nacar
             protocol.  Message thread. */
         static void applyParameters (const ParameterRegistry&, const Payload&);
 
+        /** Writes a payload's chain order and modulation matrix into a session
+            tree, in place.  The parameters are `applyParameters`' job; this is
+            everything else a preset carries.
+
+            In place matters: the MOD page caches one ValueTree handle per row
+            and only re-fetches when the MODMATRIX node itself is replaced, so
+            swapping the children out would leave its eight rows holding trees
+            no longer in the session.  Message thread. */
+        static void writePayloadToSession (StateManager&, const Payload&);
+
+        /** Applies the factory preset with this name, parameters and chain and
+            matrix and identity, straight into a registry and a session.
+
+            This exists for one caller: the processor, at construction, so that
+            a fresh instance opens on the patch its header names instead of on
+            the parameter list's raw defaults with a preset's name written over
+            them.  It needs no PresetManager instance because at that point in
+            construction there is no library, no disk and no editor yet.
+
+            Returns false when no factory preset carries that name, which is a
+            mistake in the build rather than a condition at runtime.  Message
+            thread. */
+        static bool applyFactoryPresetByName (const ParameterRegistry&, StateManager&,
+                                              const juce::String& name);
+
         /** Builds the MODMATRIX subtree a payload describes, in exactly the
             shape `ModMatrix::rebuildFromTree` expects. */
         static juce::ValueTree makeModMatrixTree (const Payload&);

@@ -64,6 +64,13 @@ namespace nacar::synth
 
         Ramp  sync, fm, pm, ringMod;
 
+        // Mod envelope 2 into pitch (semitones) and into the PM index.  Plain
+        // floats and not Ramps, for the same reason filterEnvAmount is one: a
+        // modulation DEPTH is not a per-sample target, and the envelope it
+        // scales is already continuous.
+        float pitchEnvAmount = 0.0f;
+        float pmEnvAmount    = 0.0f;
+
         // -- shaping --------------------------------------------------------
         Ramp  body, bodyTilt, density, preDrive, postSat;
         int   postSatMode = 1;

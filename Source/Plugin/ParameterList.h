@@ -112,6 +112,19 @@ FLOAT (oscFmAmount,    "osc_fm",          "FM",            0.0f,  1.0f, 0.0f,  1
 FLOAT (oscPmAmount,    "osc_pm",          "PM",            0.0f,  1.0f, 0.0f,  1.0f, "%",  "B phase-modulates A at audio rate.")                  \
 FLOAT (oscRingMod,     "osc_ring",        "Ring Mod",      0.0f,  1.0f, 0.0f,  1.0f, "%",  "Ring modulation between A and B.")                    \
                                                                                                                                                  \
+/*  Mod envelope 2 into pitch and into the PM index.                                                                                             */\
+/*                                                                                                                                               */\
+/*  These exist because envelope 1 could only reach the filter, which put two                                                                    */\
+/*  ordinary sounds out of reach: a kick or 808 whose pitch falls on the attack,                                                                 */\
+/*  and a tine electric piano whose FM index decays while the note rings. Both                                                                   */\
+/*  were being faked with a resonant filter sweep, which is a different thing.                                                                   */\
+/*                                                                                                                                               */\
+/*  Envelope 2 and not envelope 1 on purpose: the tine needs its index to decay                                                                  */\
+/*  fast while the filter opens slowly, so the two destinations need separate                                                                    */\
+/*  timing. Both default to zero, so no existing patch changes.                                                                                  */\
+FLOAT (pitchEnvAmount, "pitch_env_amt",   "Pitch Env",   -48.0f, 48.0f, 0.0f,  1.0f, "st", "Mod envelope 2 into oscillator pitch.")               \
+FLOAT (pmEnvAmount,    "pm_env_amt",      "PM Env",       -1.0f,  1.0f, 0.0f,  1.0f, "",   "Mod envelope 2 into the PM index.")                   \
+                                                                                                                                                 \
 /* ---- Sub and noise --------------------------------------------------- */                                                                     \
 CHOICE(subWave,        "sub_wave",        "Sub Wave",      "SINE|TRIANGLE|SOFT SQUARE", 0, "Sub oscillator waveform.")                            \
 FLOAT (subLevel,       "sub_level",       "Sub Level",     0.0f,  1.0f, 0.35f, 1.0f, "%",  "Sub oscillator level. Always mono-compatible.")       \

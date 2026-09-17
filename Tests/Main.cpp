@@ -5610,6 +5610,380 @@ public:
 
 static PresetTests presetTests;
 
+
+// ===========================================================================
+//  VOICE ENVELOPES -> PITCH AND PM INDEX
+//
+//  Mod envelope 1 could only reach the filter, so two ordinary sounds were out
+//  of reach: a kick whose pitch falls on the attack, and a tine electric piano
+//  whose FM index decays while the note rings. Both were being approximated
+//  with a resonant filter sweep, which is audibly a different thing - the
+//  library has several presets that say so in their own comments.
+//
+//  What is asserted here is that the two new amounts MOVE THE THINGS THEY NAME:
+//  that the pitch envelope changes the measured fundamental and not merely the
+//  brightness, and that the PM envelope changes the index and not merely the
+//  level. A parameter that exists and is read is not a feature; one that
+//  measurably changes the sound is.
+// ===========================================================================
+class VoiceEnvelopeTests : public juce::UnitTest
+{
+public:
+    VoiceEnvelopeTests() : juce::UnitTest ("Voice envelopes", "nacar") {}
+
+    static constexpr double kRate = 48000.0;
+
+    /** Mono capture of a held note, so a window of it can be measured. */
+    static std::vector<float> capture (const ParameterRegistry& params, int totalSamples,
+                                       int midiNote)
+    {
+        SynthEngine synth;
+        synth.prepare (kRate, 256, 2);
+
+        std::vector<float> out;
+        out.reserve ((size_t) totalSamples);
+
+        juce::AudioBuffer<float> buffer (2, 256);
+        bool sent = false;
+
+        while ((int) out.size() < totalSamples)
+        {
+            buffer.clear();
+            juce::MidiBuffer midi;
+
+            if (! sent)
+            {
+                midi.addEvent (juce::MidiMessage::noteOn (1, midiNote, 0.9f), 0);
+                sent = true;
+            }
+
+            synth.process (buffer, midi, params, 120.0);
+
+            for (int i = 0; i < 256 && (int) out.size() < totalSamples; ++i)
+                out.push_back (0.5f * (buffer.getSample (0, i) + buffer.getSample (1, i)));
+        }
+
+        return out;
+    }
+
+    /** Fundamental of one window, by autocorrelation with parabolic refinement.
+
+        Autocorrelation and not a single loudest bin: the oscillators are rich,
+        and at an octave of pitch envelope the second harmonic of the settled
+        note sits exactly where the fundamental of the attack was. A period
+        estimate cannot confuse the two the way a peak-picker can. */
+    static double fundamentalOf (const std::vector<float>& x, int from, int n)
+    {
+        if (from + n > (int) x.size())
+            return 0.0;
+
+        double mean = 0.0;
+        for (int i = 0; i < n; ++i)
+            mean += x[(size_t) (from + i)];
+        mean /= (double) n;
+
+        std::vector<double> w ((size_t) n);
+        for (int i = 0; i < n; ++i)
+            w[(size_t) i] = x[(size_t) (from + i)] - mean;
+
+        const int minLag = (int) (kRate / 1200.0);
+        const int maxLag = juce::jmin (n / 2, (int) (kRate / 40.0));
+
+        auto corrAt = [&w, n] (int lag)
+        {
+            double acc = 0.0;
+            for (int i = 0; i + lag < n; ++i)
+                acc += w[(size_t) i] * w[(size_t) (i + lag)];
+            return acc;
+        };
+
+        int best = -1;
+        double bestValue = 0.0;
+
+        for (int lag = minLag; lag <= maxLag; ++lag)
+        {
+            const double c = corrAt (lag);
+
+            if (c > bestValue)
+            {
+                bestValue = c;
+                best = lag;
+            }
+        }
+
+        if (best <= minLag || best >= maxLag)
+            return 0.0;
+
+        const double a = corrAt (best - 1), b = corrAt (best), c = corrAt (best + 1);
+        const double denom = a - 2.0 * b + c;
+        const double shift = std::abs (denom) > 1.0e-12 ? 0.5 * (a - c) / denom : 0.0;
+
+        return kRate / ((double) best + juce::jlimit (-0.5, 0.5, shift));
+    }
+
+    /** Spectral centroid of one window, as a brightness figure. */
+    static double centroidOf (const std::vector<float>& x, int from, int n)
+    {
+        if (from + n > (int) x.size())
+            return 0.0;
+
+        double weighted = 0.0, total = 0.0;
+
+        for (double hz = 80.0; hz <= 8000.0; hz *= 1.06)
+        {
+            double re = 0.0, im = 0.0;
+
+            for (int i = 0; i < n; ++i)
+            {
+                const double win = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi
+                                                         * (double) i / (double) n);
+                const double ph = 2.0 * juce::MathConstants<double>::pi * hz * (double) i / kRate;
+
+                re += (double) x[(size_t) (from + i)] * win * std::cos (ph);
+                im -= (double) x[(size_t) (from + i)] * win * std::sin (ph);
+            }
+
+            const double m = std::sqrt (re * re + im * im);
+
+            weighted += m * m * hz;
+            total    += m * m;
+        }
+
+        return total > 0.0 ? weighted / total : 0.0;
+    }
+
+    /** A voice with everything that would blur a measurement turned off:
+        no drift, no unit variation, no unison, one voice, filter wide open and
+        static. What is left is the oscillator and the envelopes. */
+    static void makeQuiet (TestHost& host)
+    {
+        auto set = [&host] (PID pid, float v) { host.registry.setFromUI (pid, v); };
+
+        set (PID::polyphony, 1.0f);
+        set (PID::voiceVariation, 0.0f);
+        set (PID::driftAmount, 0.0f);
+        set (PID::vibratoDepth, 0.0f);
+
+        set (PID::filterCutoff, 18000.0f);
+        set (PID::filterResonance, 0.0f);
+        set (PID::filterEnvAmount, 0.0f);
+        set (PID::filterVelAmount, 0.0f);
+        set (PID::filterKeyTrack, 0.0f);
+        set (PID::filterDrive, 0.0f);
+
+        set (PID::subLevel, 0.0f);
+        set (PID::noiseLevel, 0.0f);
+        set (PID::oscCLevel, 0.0f);
+        set (PID::bodyAmount, 0.0f);
+        set (PID::densityAmount, 0.0f);
+        set (PID::preFilterDrive, 0.0f);
+        set (PID::postSaturation, 0.0f);
+
+        set (PID::ampAttack, 0.001f);
+        set (PID::ampDecay, 0.05f);
+        set (PID::ampSustain, 1.0f);
+        set (PID::ampVelocity, 0.0f);
+
+        // A transient shape: straight up, then away, and staying away.
+        set (PID::env2Attack, 0.0005f);
+        set (PID::env2Decay, 0.10f);
+        set (PID::env2Sustain, 0.0f);
+    }
+
+    void runTest() override
+    {
+        // 45 is A2, 110 Hz.
+        const int midiNote = 45;
+        const double nominalHz = 440.0 * std::pow (2.0, (midiNote - 69) / 12.0);
+
+        beginTest ("with both amounts at zero, envelope 2's shape reaches neither pitch nor index");
+        {
+            // The guarantee that the whole library depends on: 300 presets were
+            // written before these parameters existed and none of them may
+            // change. Two renders whose ONLY difference is env 2's shape must
+            // come out identical while the amounts are zero.
+            //
+            // Env 2 already had two destinations before any of this - it adds
+            // to density, and it morphs the vowel of the FORMANT model - so the
+            // comparison has to shut both of those off or it measures them
+            // instead. Density is held at maximum, where the sum saturates its
+            // own clamp and env 2's contribution cannot show (the character
+            // scalars are 1.00, 1.15 and 1.35, so the product is at or above
+            // the ceiling for all three), and the filter is HAZE, which has no
+            // vowel to morph. What is left is only the two new paths.
+            auto build = [this] (float decay)
+            {
+                TestHost host;
+                makeQuiet (host);
+                host.registry.setFromUI (PID::densityAmount, 1.0f);
+                host.registry.setFromUI (PID::filterModel, 1.0f);
+                host.registry.setFromUI (PID::env2Decay, decay);
+                host.registry.setFromUI (PID::pitchEnvAmount, 0.0f);
+                host.registry.setFromUI (PID::pmEnvAmount, 0.0f);
+                host.registry.setFromUI (PID::oscPmAmount, 0.35f);
+                return capture (host.registry, (int) (kRate * 0.4), 45);
+            };
+
+            const auto fast = build (0.02f);
+            const auto slow = build (4.0f);
+
+            double worst = 0.0;
+
+            for (size_t i = 0; i < fast.size(); ++i)
+                worst = juce::jmax (worst, (double) std::abs (fast[i] - slow[i]));
+
+            expect (worst < 1.0e-6,
+                    "env 2's shape changed the output by " + juce::String (worst, 8)
+                        + " with both new amounts at zero - an existing preset would move");
+        }
+
+        beginTest ("the pitch envelope moves the fundamental, by the interval it is asked for");
+        {
+            // An octave up on the attack, settling to the played note. Measured
+            // as a period, so the settled note's second harmonic cannot be
+            // mistaken for the attack's fundamental.
+            TestHost host;
+            makeQuiet (host);
+            host.registry.setFromUI (PID::oscAWave, 2.0f);        // saw
+            host.registry.setFromUI (PID::oscBLevel, 0.0f);
+            host.registry.setFromUI (PID::pitchEnvAmount, 12.0f);
+
+            const auto x = capture (host.registry, (int) (kRate * 0.6), midiNote);
+
+            const double early = fundamentalOf (x, (int) (kRate * 0.002), 1024);
+            const double late  = fundamentalOf (x, (int) (kRate * 0.45), 4096);
+
+            logMessage ("    pitch env +12 st: attack " + juce::String (early, 1)
+                        + " Hz, settled " + juce::String (late, 1)
+                        + " Hz (played " + juce::String (nominalHz, 1) + " Hz)");
+
+            expect (early > nominalHz * 1.7 && early < nominalHz * 2.3,
+                    "the attack should sound about an octave above the played note, and read "
+                        + juce::String (early, 1) + " Hz against " + juce::String (nominalHz, 1));
+
+            expect (std::abs (late - nominalHz) < nominalHz * 0.06,
+                    "the note should settle back to the one that was played, and read "
+                        + juce::String (late, 1) + " Hz");
+        }
+
+        beginTest ("a negative pitch envelope falls onto the note instead of off it");
+        {
+            // The other direction. A kick is the POSITIVE case above - it starts
+            // high and falls onto the note - and this is the rarer gesture that
+            // arrives from below. The sign has to work both ways regardless, or
+            // half the range is decoration.
+            TestHost host;
+            makeQuiet (host);
+            host.registry.setFromUI (PID::oscAWave, 0.0f);        // sine, so the period is unambiguous
+            host.registry.setFromUI (PID::oscBLevel, 0.0f);
+            host.registry.setFromUI (PID::pitchEnvAmount, -12.0f);
+
+            const auto x = capture (host.registry, (int) (kRate * 0.6), 60);
+
+            const double played = 440.0 * std::pow (2.0, (60 - 69) / 12.0);
+            const double early = fundamentalOf (x, (int) (kRate * 0.002), 2048);
+            const double late  = fundamentalOf (x, (int) (kRate * 0.45), 4096);
+
+            logMessage ("    pitch env -12 st: attack " + juce::String (early, 1)
+                        + " Hz, settled " + juce::String (late, 1) + " Hz");
+
+            expect (early < played * 0.72,
+                    "the attack should start about an octave below and read "
+                        + juce::String (early, 1) + " Hz against " + juce::String (played, 1));
+
+            expect (std::abs (late - played) < played * 0.06,
+                    "it should arrive at the played note and read " + juce::String (late, 1) + " Hz");
+        }
+
+        beginTest ("the PM envelope moves the index, and leaves the pitch alone");
+        {
+            // The tine: a fixed ratio whose index falls while the note rings.
+            // Brightness has to collapse and the fundamental has to stay put -
+            // the second is what separates this from a pitch envelope, and from
+            // the filter sweep it used to be faked with.
+            TestHost host;
+            makeQuiet (host);
+            host.registry.setFromUI (PID::oscAWave, 0.0f);        // sine carrier
+            host.registry.setFromUI (PID::oscBWave, 0.0f);        // sine modulator
+            host.registry.setFromUI (PID::oscBLevel, 0.0f);
+            host.registry.setFromUI (PID::oscBOctave, 1.0f);      // 2:1
+            host.registry.setFromUI (PID::oscBFine, 0.0f);
+            host.registry.setFromUI (PID::oscPmAmount, 0.0f);
+            host.registry.setFromUI (PID::pmEnvAmount, 0.9f);
+            host.registry.setFromUI (PID::env2Decay, 0.18f);
+
+            // Density saturated, so the brightness that collapses below is the
+            // index and not env 2's other route into the voice.
+            host.registry.setFromUI (PID::densityAmount, 1.0f);
+
+            const auto x = capture (host.registry, (int) (kRate * 0.7), midiNote);
+
+            const double brightEarly = centroidOf (x, (int) (kRate * 0.004), 4096);
+            const double brightLate  = centroidOf (x, (int) (kRate * 0.55), 4096);
+
+            const double pitchEarly = fundamentalOf (x, (int) (kRate * 0.004), 4096);
+            const double pitchLate  = fundamentalOf (x, (int) (kRate * 0.55), 4096);
+
+            logMessage ("    pm env 0.9: centroid " + juce::String (brightEarly, 0) + " Hz -> "
+                        + juce::String (brightLate, 0) + " Hz, fundamental "
+                        + juce::String (pitchEarly, 1) + " Hz -> " + juce::String (pitchLate, 1) + " Hz");
+
+            expect (brightEarly > brightLate * 1.5,
+                    "the index should collapse: centroid went from " + juce::String (brightEarly, 0)
+                        + " Hz to " + juce::String (brightLate, 0) + " Hz");
+
+            expect (std::abs (pitchEarly - pitchLate) < nominalHz * 0.06,
+                    "a PM index envelope must not transpose anything: the fundamental moved from "
+                        + juce::String (pitchEarly, 1) + " Hz to " + juce::String (pitchLate, 1) + " Hz");
+        }
+
+        beginTest ("the PM envelope cannot drive the index past the knob's own range");
+        {
+            // The sum is clamped to 0..1, so a preset with a high index and a
+            // high envelope produces the loudest index the control could reach
+            // and not an undefined one.
+            // Both hosts are identical apart from the amount, env 2 included:
+            // a reference that differed in env 2's shape would be measuring
+            // that instead. Density saturated for the same reason as above.
+            auto build = [this] (float pmEnv)
+            {
+                TestHost host;
+                makeQuiet (host);
+                host.registry.setFromUI (PID::densityAmount, 1.0f);
+                host.registry.setFromUI (PID::oscAWave, 0.0f);
+                host.registry.setFromUI (PID::oscBWave, 0.0f);
+                host.registry.setFromUI (PID::oscBLevel, 0.0f);
+                host.registry.setFromUI (PID::oscPmAmount, 1.0f);
+                host.registry.setFromUI (PID::pmEnvAmount, pmEnv);
+                host.registry.setFromUI (PID::env2Sustain, 1.0f);
+                host.registry.setFromUI (PID::env2Decay, 0.01f);
+                return capture (host.registry, (int) (kRate * 0.3), midiNote);
+            };
+
+            const auto x = build (1.0f);
+            const auto r = build (0.0f);
+
+            // From 0.1 s: before that the index is still ramping to 1.0 from the
+            // default, and while it is below the ceiling the envelope genuinely
+            // does add to it. The clamp is a claim about the top, not the ramp.
+            double worst = 0.0;
+            const int from = (int) (kRate * 0.1);
+
+            for (int i = from; i < (int) x.size(); ++i)
+                worst = juce::jmax (worst, (double) std::abs (x[(size_t) i] - r[(size_t) i]));
+
+            expect (worst < 1.0e-5,
+                    "an index already at maximum should not change when an envelope adds to it, "
+                    "and differed by " + juce::String (worst, 8));
+
+            for (float v : x)
+                expect (std::isfinite (v), "a clamped index produced a non-finite sample");
+        }
+    }
+};
+
+static VoiceEnvelopeTests voiceEnvelopeTests;
+
 static IntegrationTests integrationTests;
 
 static SampleTests sampleTests;

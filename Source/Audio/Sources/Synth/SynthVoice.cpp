@@ -401,9 +401,18 @@ namespace nacar::synth
         };
 
         const bool renderA     = sounds (p.oscA.level);
+        // B is rendered when it is AUDIBLE or when it is a MODULATOR, which is
+        // why its own level is only the first of these tests: a tine piano sets
+        // B's level to zero and hears it only through the PM index.
+        //
+        // The envelope into that index belongs in this list for the same
+        // reason. A preset whose index is zero at rest and opened only by
+        // envelope 2 - which is exactly what a decaying tine is - would
+        // otherwise skip the modulator entirely and produce a plain sine.
         const bool renderB     = sounds (p.oscB.level)
                                  || p.pm.at (0) > audible || p.fm.at (0) > audible
-                                 || p.ringMod.at (0) > audible || p.sync.at (0) > audible;
+                                 || p.ringMod.at (0) > audible || p.sync.at (0) > audible
+                                 || std::abs (p.pmEnvAmount) > audible;
         const bool renderC     = sounds (p.oscC.level);
         const bool renderSub   = sounds (p.subLevel);
         const bool renderNoise = sounds (p.noiseLevel);
@@ -443,18 +452,30 @@ namespace nacar::synth
             const float vibrato = sineTurns (vibratoPhase) * p.vibratoDepth
                                   * juce::jmax (wheel, press) * 0.6f;
 
+            // -- envelopes --------------------------------------------------
+            // Advanced before the pitch is assembled, because envelope 2 is one
+            // of the things that sets it.
+            const float amp  = ampEnv.process();
+            const float env1 = modEnv1.process();
+            const float env2 = modEnv2.process();
+
+            // The note as played: glide, bend, drift, unit variation, vibrato.
+            // The filter tracks THIS one.
             const float note = glidingNote + p.pitchBendSemitones.at (i)
                              + driftSemis + tuningVar + vibrato;
+
+            // The note as sounded.  Envelope 2 into pitch is what makes a kick
+            // fall on its attack and a tom bend; it is deliberately NOT part of
+            // `note` above, because key tracking follows the key that was
+            // pressed.  Letting a 40-semitone attack transient sweep the filter
+            // by three and a half octaves as well is not what anyone means by
+            // "the filter follows the note".
+            const float soundingNote = note + p.pitchEnvAmount * env2;
 
             // One pitch conversion for the whole voice: each oscillator's own
             // octave, semitone and fine offset became a constant ratio when the
             // block was prepared.
-            const float baseHz = midiNoteToHz (note);
-
-            // -- envelopes --------------------------------------------------
-            const float amp  = ampEnv.process();
-            const float env1 = modEnv1.process();
-            const float env2 = modEnv2.process();
+            const float baseHz = midiNoteToHz (soundingNote);
 
             // -- oscillators ------------------------------------------------
             // B is rendered first: it is the modulator for FM, PM, sync and
@@ -466,7 +487,15 @@ namespace nacar::synth
                 : 0.0f;
 
             const float fmAmount = p.fm.at (i);
-            const float pmAmount = p.pm.at (i);
+
+            // Envelope 2 into the PM index.  A tine electric piano is a fixed
+            // ratio whose index falls away while the note rings, which is a
+            // different sound from a fixed index behind a closing filter - and
+            // the filter version was all this instrument could do before.
+            // Clamped to the knob's own range so an envelope cannot drive the
+            // index somewhere the control could not reach.
+            const float pmAmount = juce::jlimit (0.0f, 1.0f,
+                                                 p.pm.at (i) + p.pmEnvAmount * env2);
             const float syncAmount = p.sync.at (i);
 
             // Hard sync: A is reset by a master running at B's pitch.  The

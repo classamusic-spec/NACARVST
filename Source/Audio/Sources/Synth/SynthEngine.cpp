@@ -336,6 +336,9 @@ namespace nacar
             smoothers.pm.set   (params.pm,   p.raw (PID::oscPmAmount), numSamples, coef);
             smoothers.ring.set (params.ringMod, p.raw (PID::oscRingMod), numSamples, coef);
 
+            params.pitchEnvAmount = p.raw (PID::pitchEnvAmount);
+            params.pmEnvAmount    = p.raw (PID::pmEnvAmount);
+
             smoothers.body.set     (params.body,     p.raw (PID::bodyAmount), numSamples, coef);
             smoothers.bodyTilt.set (params.bodyTilt, p.raw (PID::bodyTilt), numSamples, coef);
             smoothers.density.set  (params.density,  p.raw (PID::densityAmount), numSamples, coef);

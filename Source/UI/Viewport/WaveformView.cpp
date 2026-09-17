@@ -858,7 +858,7 @@ namespace nacar::ui
                             big, dropTextTrack, juce::Justification::horizontallyCentred);
 
         g.setColour (theme::glassInkFaint);
-        theme::drawTracked (g, "NO SAMPLE ENGINE IN THIS BUILD",
+        theme::drawTracked (g, "READING THE FILE",
                             { area.getX(), area.getCentreY() + small.getHeight() * 0.5f,
                               area.getWidth(), small.getHeight() },
                             small, noteTextTrack, juce::Justification::horizontallyCentred);
@@ -1295,26 +1295,21 @@ namespace nacar::ui
             return;
 
         // ------------------------------------------------------------------
-        //  PHASE 2 BEHAVIOUR - READ THIS BEFORE CHANGING IT
+        //  WHAT A DROP DOES
         //
-        //  The dropped file's path and name are written into the SAMPLE tree
-        //  and nothing else happens.  The file is deliberately NOT opened:
+        //  It writes the path into the SAMPLE tree and switches the instrument
+        //  to SAMPLE.  It still does not open the file here: the processor is
+        //  watching ids::sampleFile and starts an asynchronous decode, because
+        //  decoding on the message thread would stall the editor for seconds
+        //  on a large AIFF.  The decode fills the rate, length and channel
+        //  count, runs the analysis, and hands the overview to setPeakSource().
         //
-        //    * decoding on the message thread would stall the editor, and on a
-        //      large AIFF it would stall it for seconds;
-        //    * V1 Phase 2 has no sample engine, so decoded audio would have
-        //      nowhere to go even if we had it;
-        //    * inventing an envelope for audio nobody has read would be a lie
-        //      drawn in violet, which is worse than an empty field.
-        //
-        //  Asynchronous decoding, waveform and overview generation, and the
-        //  analysis pass (root, scale, tempo, transients, loudness) land in
-        //  Phases 18-19.  They will live in Source/Audio/Sources/SampleEngine
-        //  and Source/Analysis/, and they will fill ids::sampleRate,
-        //  ids::sampleLengthSamples, ids::sampleChannels and the ANALYSIS
-        //  subtree, then hand the decoded peaks to setThumbnailSource() above -
-        //  which is already complete and working.  Nothing in this file needs
-        //  to change when they arrive.
+        //  THE SOURCE SWITCH IS NOT A CONVENIENCE.  Without it the sample
+        //  decodes, the waveform draws, MUTATE works on it - and the keyboard
+        //  still plays the synth, because source_mode is what decides which
+        //  engine is heard.  A user who drops audio onto an instrument and
+        //  hears something else concludes the drop failed, and every part of
+        //  the path that did work is invisible to them.
         // ------------------------------------------------------------------
         auto sample = processor.getStateManager().group (ids::SAMPLE);
 
@@ -1329,6 +1324,11 @@ namespace nacar::ui
         sample.setProperty (ids::playhead,            0.0, nullptr);
         sample.setProperty (ids::selectionStart,      0.0, nullptr);
         sample.setProperty (ids::selectionEnd,        0.0, nullptr);
+
+        // Switch the instrument to what was just dropped on it. See the note
+        // above: without this the drop works in every respect except the one
+        // the user can hear.
+        processor.getParameters().setFromUI (PID::sourceMode, 1.0f);   // SAMPLE
 
         if (onFileDropped != nullptr)
             onFileDropped (dropped);

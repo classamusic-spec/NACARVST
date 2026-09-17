@@ -270,6 +270,12 @@ namespace nacar
                 s.pulseWidth.snap (0.5f);
         }
 
+        Quality qualityFor (const ParameterRegistry& p) const noexcept
+        {
+            return offline ? Quality::ultra
+                           : (Quality) juce::jlimit (0, 2, p.choice (PID::qualityMode));
+        }
+
         /** Reads the whole synth section. Called once per sub-block. */
         void buildParams (const ParameterRegistry& p, int numSamples)
         {
@@ -277,8 +283,7 @@ namespace nacar
             params.numSamples = numSamples;
             params.bank = bank;
 
-            params.quality = offline ? Quality::ultra
-                                     : (Quality) juce::jlimit (0, 2, p.choice (PID::qualityMode));
+            params.quality = qualityFor (p);
 
             params.character = characterProfile (characterFromIndex (p.choice (PID::synthCharacter)));
 
@@ -704,6 +709,16 @@ namespace nacar
 
             const int total = buffer.getNumSamples();
             int position = 0;
+
+            // A note-on at sample 0 is handled before the first sub-block, so
+            // it reads the SynthBlockParams the PREVIOUS block left behind -
+            // and on the very first block of a session, the defaults.  That is
+            // harmless for everything a voice takes from there per sample,
+            // because the block it is about to render rebuilds them; it is not
+            // harmless for the one setting a voice latches at note-on and keeps
+            // until it is played again.  So the quality tier, and only that, is
+            // refreshed before any MIDI is looked at.
+            params.quality = qualityFor (p);
 
             // Sample-accurate MIDI: render up to each event, apply it, carry on.
             for (const auto metadata : midi)

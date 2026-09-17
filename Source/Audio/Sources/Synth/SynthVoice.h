@@ -44,6 +44,12 @@ namespace nacar::synth
         /** Short fade to silence, for voice stealing. */
         void steal() noexcept;
 
+        /** The oversampling factor the nonlinear core is currently prepared
+            for: 2 under ECO and STUDIO, 4 under ULTRA.  It is latched at
+            note-on and does not change underneath a sounding note - see
+            retuneCore() for why. */
+        int   getOversamplingFactor() const noexcept { return osFactor; }
+
         bool  isActive() const noexcept     { return ampEnv.isActive(); }
         bool  isReleasing() const noexcept  { return ampEnv.isReleasing(); }
         int   getNote() const noexcept      { return currentNote; }
@@ -84,6 +90,12 @@ namespace nacar::synth
 
         void rebuildUnison (OscState&, const OscSettings&, const SynthBlockParams&,
                             juce::uint32 salt) noexcept;
+
+        /** Re-prepares the nonlinear core for a new oversampling factor.
+            Allocation-free and lock-free, but it zeroes every filter state, so
+            it is only ever called where the voice is already starting from
+            silence. */
+        void retuneCore (int factor) noexcept;
 
         void prepareOscBlock (OscState&, const OscSettings&,
                               const SynthBlockParams&) noexcept;
@@ -131,10 +143,24 @@ namespace nacar::synth
         DcBlocker outputDc[2];
 
         // The nonlinear core - drive, both filters, the saturator - runs at
-        // twice the sample rate.  See Halfband.h for the measurements that
-        // decided which stages go inside it and which stay outside.
+        // twice the sample rate, or four times it under ULTRA.  See Halfband.h
+        // for the measurements that decided which stages go inside it and which
+        // stay outside.
+        //
+        // Only one of the two converter pairs is used at a time, and the
+        // filters and the saturator above are prepared for whichever factor is
+        // in force.  They are cheap - a few hundred bytes each - so both exist
+        // rather than one being chosen at prepare() time, which would make the
+        // factor fixed for the lifetime of the instrument.
         VoiceUpsampler upsampler[2];
         VoiceDownsampler downsampler[2];
+
+        VoiceUpsampler4x upsampler4[2];
+        VoiceDownsampler4x downsampler4[2];
+
+        /** 2 for ECO and STUDIO, 4 for ULTRA.  The filters and the saturator
+            above are prepared at `sr * osFactor`. */
+        int osFactor = 2;
 
         // -- envelopes ------------------------------------------------------
         Envelope ampEnv, modEnv1, modEnv2;

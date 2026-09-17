@@ -19,27 +19,22 @@ namespace nacar::synth
         driftB.prepare (sr, (juce::uint32) (index * 2411 + 307));
         driftFilter.prepare (sr, (juce::uint32) (index * 2411 + 977));
 
-        // Everything inside the oversampled block is prepared at twice the
-        // sample rate; everything outside it at the real one.  This is also why
-        // the block is not switched off in ECO: a filter's coefficients are
-        // tied to the rate it runs at, so turning oversampling off at runtime
-        // would retune every filter in the instrument.  ECO's savings come from
-        // the wavetable interpolation instead.
-        const double oversampled = sr * 2.0;
+        // Everything inside the oversampled block is prepared at a multiple of
+        // the sample rate; everything outside it at the real one.  A filter's
+        // coefficients are tied to the rate it runs at, so the factor cannot be
+        // changed under a sounding note - see retuneCore().  The voice always
+        // starts at 2x, which is what ECO and STUDIO use, so an instrument that
+        // is never switched to ULTRA is prepared exactly as it always was.
+        osFactor = 2;
 
         for (int ch = 0; ch < 2; ++ch)
         {
             body[ch].prepare (sr);
             density[ch].prepare (sr);
             outputDc[ch].prepare (sr);
-
-            saturator[ch].prepare (oversampled);
-            filter1[ch].prepare (oversampled);
-            filter2[ch].prepare (oversampled);
-
-            upsampler[ch].reset();
-            downsampler[ch].reset();
         }
+
+        retuneCore (2);
 
         ampEnv.prepare (sr);
         modEnv1.prepare (sr);
@@ -73,6 +68,59 @@ namespace nacar::synth
         reset();
     }
 
+    // -----------------------------------------------------------------------
+    //  THE OVERSAMPLING FACTOR, AND WHY IT IS LATCHED AT NOTE-ON.
+    //
+    //  ULTRA runs the nonlinear core at four times the sample rate instead of
+    //  twice.  Every filter inside that core derives its coefficients from the
+    //  rate it was prepared at, so the factor cannot simply be swapped: the
+    //  filters have to be re-prepared, and re-preparing zeroes their state.
+    //
+    //  Doing that under a sounding note is a step discontinuity in the middle
+    //  of a resonant filter - a thump, not a click, and a long one at low
+    //  cutoffs.  Three ways out were available:
+    //
+    //    * prepare both factors and cross-fade between them.  Correct, but it
+    //      runs both cores at once for the length of the fade, on every
+    //      sounding voice at the same instant.  This build is already at 137 %
+    //      of one core at 32 voices with 8x unison, so the fade would buy a
+    //      clean transition with a dropout.
+    //    * fade the voice to silence, switch, fade back.  A hole in a held
+    //      note, which is not obviously better than a thump.
+    //    * change the factor only where the voice is already starting from
+    //      silence, which is note-on.
+    //
+    //  The third is what this does, and it is the one that costs nothing:
+    //  note-on already clears every filter, saturator and converter in the
+    //  core, so re-preparing them there adds coefficient arithmetic to work
+    //  that was happening anyway.  A sounding note keeps the factor it started
+    //  with; the next note played uses the new one.  Quality is a CPU budget,
+    //  not a musical control, and the parameter is live from the next note
+    //  rather than dead.
+    //
+    //  Realtime-safe: prepare() on a filter or a saturator sets coefficients
+    //  and fills fixed-size member arrays.  It allocates nothing, locks
+    //  nothing and logs nothing.
+    // -----------------------------------------------------------------------
+    void SynthVoice::retuneCore (int factor) noexcept
+    {
+        osFactor = (factor >= 4) ? 4 : 2;
+
+        const double oversampled = sr * (double) osFactor;
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            saturator[ch].prepare (oversampled);
+            filter1[ch].prepare (oversampled);
+            filter2[ch].prepare (oversampled);
+
+            upsampler[ch].reset();
+            downsampler[ch].reset();
+            upsampler4[ch].reset();
+            downsampler4[ch].reset();
+        }
+    }
+
     void SynthVoice::reset() noexcept
     {
         for (auto* o : { &oscA, &oscB, &oscC })
@@ -98,6 +146,8 @@ namespace nacar::synth
             outputDc[ch].reset();
             upsampler[ch].reset();
             downsampler[ch].reset();
+            upsampler4[ch].reset();
+            downsampler4[ch].reset();
         }
 
         ampEnv.reset();
@@ -172,6 +222,12 @@ namespace nacar::synth
                 masterPhase = 0.0f;
             }
 
+            // The only place the core's rate can change.  See retuneCore().
+            const int wanted = (p.quality == Quality::ultra) ? 4 : 2;
+
+            if (wanted != osFactor)
+                retuneCore (wanted);
+
             for (int ch = 0; ch < 2; ++ch)
             {
                 filter1[ch].reset();
@@ -182,6 +238,8 @@ namespace nacar::synth
                 outputDc[ch].reset();
                 upsampler[ch].reset();
                 downsampler[ch].reset();
+                upsampler4[ch].reset();
+                downsampler4[ch].reset();
             }
         }
         else
@@ -657,30 +715,51 @@ namespace nacar::synth
 
                 // ---- the oversampled nonlinear core ------------------------
                 //
-                // Drive, both filters and the saturator run at twice the rate.
-                // NacarBench measured the ladder's feedback saturator at +9.4 dB
-                // of inharmonic energy and the drive stage at +3.8 dB; Body and
-                // the post saturator contributed nothing, so they stay outside.
-                float half[2] = { 0.0f, 0.0f };
-                upsampler[c].process (*channels[c], half[0], half[1]);
-
-                for (auto& sample : half)
+                // Drive, both filters and the saturator run at twice the rate,
+                // or four times it under ULTRA.  NacarBench measured the
+                // ladder's feedback saturator at +9.4 dB of inharmonic energy
+                // and the drive stage at +3.8 dB; Body and the post saturator
+                // contributed nothing, so they stay outside at every quality.
+                //
+                // One expression, used by both branches.  It is written once so
+                // that raising the factor cannot quietly change the arithmetic
+                // at the factor that was already shipping.
+                const auto stage = [&] (float x) noexcept
                 {
-                    float y = tanhFast (sample * drive) / drive;
+                    float y = tanhFast (x * drive) / drive;
 
                     y = f1.process (y);
 
                     if (p.filter2On)
                         y = lerp (y, filter2[c].process (y), mix2);
 
-                    sample = saturator[c].process (y, satAmount, p.postSatMode, ch.satBias);
-                }
+                    return saturator[c].process (y, satAmount, p.postSatMode, ch.satBias);
+                };
 
                 // Every stage above can generate an even-harmonic term, and an
                 // even-harmonic generator also generates DC.  One blocker per
                 // channel at the end of the voice keeps that out of the bus,
                 // where it would quietly eat headroom from every other voice.
-                *channels[c] = outputDc[c].process (downsampler[c].process (half[0], half[1]));
+                if (osFactor == 4)
+                {
+                    float quarter[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    upsampler4[c].process (*channels[c], quarter);
+
+                    for (auto& sample : quarter)
+                        sample = stage (sample);
+
+                    *channels[c] = outputDc[c].process (downsampler4[c].process (quarter));
+                }
+                else
+                {
+                    float half[2] = { 0.0f, 0.0f };
+                    upsampler[c].process (*channels[c], half[0], half[1]);
+
+                    for (auto& sample : half)
+                        sample = stage (sample);
+
+                    *channels[c] = outputDc[c].process (downsampler[c].process (half[0], half[1]));
+                }
             }
 
             // -- amp and pan -------------------------------------------------
@@ -704,6 +783,8 @@ namespace nacar::synth
                     outputDc[c].reset();
                     upsampler[c].reset();
                     downsampler[c].reset();
+                    upsampler4[c].reset();
+                    downsampler4[c].reset();
                 }
             }
 

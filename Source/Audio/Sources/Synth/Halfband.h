@@ -30,6 +30,11 @@ namespace nacar::synth
 
         and nothing else in the voice.
 
+        STUDIO and ECO run that block at 2x.  ULTRA runs the same block - not a
+        wider one - at 4x, by putting a second halfband in series with the
+        first; see Halfband4xUp below.  Widening the block instead would cost
+        several times more for stages the table above measures at zero.
+
         ---------------------------------------------------------------------
         DESIGN
 
@@ -54,6 +59,13 @@ namespace nacar::synth
         static constexpr int length = NumTaps;
         static constexpr int centre = (NumTaps - 1) / 2;       ///< always odd
         static constexpr int numEven = (NumTaps + 1) / 2;      ///< taps at even indices
+
+        /** Circular-buffer size for a history of `numEven` samples: the next
+            power of two STRICTLY above it, so the oldest tap can never read the
+            slot the newest write just took.  It is 32 for every length up to 61
+            taps, which is why the 19-tap converters index exactly as they
+            always have. */
+        static constexpr int historySize = (numEven < 32) ? 32 : ((numEven < 64) ? 64 : 128);
 
         /** The even-indexed taps, which are the only ones that cost anything. */
         static const std::array<float, (size_t) numEven>& evenTaps()
@@ -145,7 +157,7 @@ namespace nacar::synth
         }
 
     private:
-        static constexpr int size = 32;          ///< next power of two above numEven
+        static constexpr int size = Design::historySize;
         static constexpr int mask = size - 1;
 
         std::array<float, (size_t) size> history {};
@@ -198,12 +210,73 @@ namespace nacar::synth
         }
 
     private:
-        static constexpr int size = 32;
+        static constexpr int size = Design::historySize;
         static constexpr int mask = size - 1;
 
         std::array<float, (size_t) size> evenHistory {};
         std::array<float, (size_t) size> oddHistory {};
         int write = 0;
+    };
+
+    /**
+        4x UPSAMPLER, as two halfbands in series.
+
+        A halfband always cuts at a quarter of its own output rate, which is
+        half of its input rate - so the same design works at both steps of the
+        cascade and no second set of coefficients is needed:
+
+            stage 1   sr  -> 2sr,  passes 0 .. sr/2
+            stage 2   2sr -> 4sr,  passes 0 .. sr
+
+        Stage 2's passband is wider than the signal it is handed, which is
+        exactly right: it has nothing left to remove on the way up, and on the
+        way down it is the stage that stops everything between sr and 2sr from
+        folding into the audible band.  Stage 1 then removes what lands between
+        sr/2 and sr.  Neither stage can do the other's job.
+
+        Time order is preserved throughout.  Halfband2xUp emits the even
+        high-rate phase first and the odd one second, so feeding stage 2 with
+        those two in that order produces the four 4x samples in order.
+    */
+    template <int NumTaps>
+    class Halfband4xUp
+    {
+    public:
+        void reset() noexcept { stage1.reset(); stage2.reset(); }
+
+        forcedinline void process (float x, float (&out)[4]) noexcept
+        {
+            float a = 0.0f, b = 0.0f;
+            stage1.process (x, a, b);
+            stage2.process (a, out[0], out[1]);
+            stage2.process (b, out[2], out[3]);
+        }
+
+    private:
+        Halfband2xUp<NumTaps> stage1;    ///< sr  -> 2sr
+        Halfband2xUp<NumTaps> stage2;    ///< 2sr -> 4sr
+    };
+
+    /**
+        4x DOWNSAMPLER.  The mirror image: decimate 4sr to 2sr twice over, in
+        the reverse order to the upsampler's stages.
+    */
+    template <int NumTaps>
+    class Halfband4xDown
+    {
+    public:
+        void reset() noexcept { stage1.reset(); stage2.reset(); }
+
+        forcedinline float process (const float (&in)[4]) noexcept
+        {
+            const float a = stage2.process (in[0], in[1]);
+            const float b = stage2.process (in[2], in[3]);
+            return stage1.process (a, b);
+        }
+
+    private:
+        Halfband2xDown<NumTaps> stage1;  ///< 2sr -> sr
+        Halfband2xDown<NumTaps> stage2;  ///< 4sr -> 2sr
     };
 
     /** 19 taps: 10 multiplies per phase.
@@ -218,4 +291,18 @@ namespace nacar::synth
 
     using VoiceUpsampler   = Halfband2xUp<kHalfbandTaps>;
     using VoiceDownsampler = Halfband2xDown<kHalfbandTaps>;
+
+    /** ULTRA's pair.  Same taps, one more stage.
+
+        The extra stage costs latency as well as arithmetic: each halfband's
+        group delay is `centre` samples at its own rate, so the round trip
+        through the 2x pair is 9 samples of the voice's own rate and through the
+        4x pair 13.5.  A voice started under ULTRA is therefore 4.5 samples -
+        94 microseconds at 48 kHz - behind a voice started under STUDIO.  That
+        matters nowhere except between two voices playing the same note in
+        phase, which unison does inside a single voice and never across two. */
+    inline constexpr int kUltraHalfbandTaps = 43;
+
+    using VoiceUpsampler4x   = Halfband4xUp<kUltraHalfbandTaps>;
+    using VoiceDownsampler4x = Halfband4xDown<kUltraHalfbandTaps>;
 }

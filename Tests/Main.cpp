@@ -29,45 +29,8 @@
 
 using namespace nacar;
 
-// ===========================================================================
-//  A minimal host for the parameter tree.
-//
-//  The real NacarProcessor pulls in the plugin client, which needs a host to
-//  link against.  The tests only need something that owns an APVTS, so they
-//  own the smallest AudioProcessor that can.
-// ===========================================================================
-class TestHost : public juce::AudioProcessor
-{
-public:
-    TestHost()
-        : juce::AudioProcessor (BusesProperties()
-                                    .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
-          apvts (*this, nullptr, "PARAMETERS", ParameterRegistry::createLayout())
-    {
-        registry.attach (apvts);
-    }
+#include "TestHost.h"
 
-    void prepareToPlay (double, int) override {}
-    void releaseResources() override {}
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
-
-    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
-    bool hasEditor() const override { return false; }
-    const juce::String getName() const override { return "TestHost"; }
-    bool acceptsMidi() const override { return true; }
-    bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
-    void changeProgramName (int, const juce::String&) override {}
-    void getStateInformation (juce::MemoryBlock&) override {}
-    void setStateInformation (const void*, int) override {}
-
-    juce::AudioProcessorValueTreeState apvts;
-    ParameterRegistry registry;
-};
 
 // ===========================================================================
 //  Parameter table
